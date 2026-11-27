@@ -55,6 +55,12 @@ def current_owner(x_vulture_nonce: str = Header("")) -> str:
     return security.nonce_hash(x_vulture_nonce)
 
 
+def optional_owner(x_vulture_nonce: str = Header("")) -> str | None:
+    """For listing only: no nonce means no identity, which owns nothing, so the list is simply empty.
+    A nonce that is sent but malformed is still an error, so a client bug doesn't look like "no scans"."""
+    return current_owner(x_vulture_nonce) if x_vulture_nonce else None
+
+
 def own_scan(sid: str, owner: str):
     """404 for scans that are missing AND for scans that belong to someone else, so ids can't be probed."""
     if not store.owns(sid, owner):
@@ -192,7 +198,9 @@ def limits():
 
 @app.get("/api/scans")
 def list_scans(q: str = "", status: str = "", verdict: str = "", limit: int = Query(100, ge=1, le=500),
-               owner: str = Depends(current_owner)):
+               owner: str | None = Depends(optional_owner)):
+    if owner is None:
+        return []
     return store.list_scans(q=q, status=status, verdict=verdict, limit=limit, owner=owner)
 
 

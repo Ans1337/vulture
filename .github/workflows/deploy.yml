@@ -29,13 +29,11 @@ jobs:
         run: ./start.sh
       - name: Check dashboard and API
         run: |
-          curl --fail --silent --show-error --retry 15 --retry-all-errors --retry-delay 1 \
-            http://127.0.0.1:8000/ | cmp dashboard/index.html -
-          # no APP_TOKEN in the CI .env, so the API is open
+          # the same checks the production deploy runs (no APP_TOKEN in the CI .env, so the API is open)
+          bash infra/deploy-checks.sh 127.0.0.1:8000
+          # a nonce from POST /api/nonce works end to end
           curl -fsS -H "X-Vulture-Nonce: $(curl -fsS -X POST http://127.0.0.1:8000/api/nonce | jq -r .nonce)" \
             http://127.0.0.1:8000/api/scans | jq -e '. == []'
-          # scan data needs a personal nonce
-          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8000/api/scans)" = 401
 
   deploy:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'

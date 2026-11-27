@@ -26,6 +26,8 @@ endpoints on `127.0.0.1:8001`. Caddy already forwards `parivant.se` to this addr
 
    The separate checkout preserves the edits made when first setting up the VM.
    If the forced-command script changes later, reinstall it with the same `install` command.
+   The post-deploy health checks are in `infra/deploy-checks.sh` and run from the deployed commit, so
+   changing them does not need a reinstall.
 
 3. On your laptop, create a key dedicated to this workflow and authorize it on the VM.
    The key can trigger the installed deployment command. Your existing SSH login still works.
