@@ -58,12 +58,11 @@ API responds. Recreating the API clears in-memory scan history and interrupts ac
 After the first deployment, use `/opt/vulture-main` for the deployed source, and keep editing
 production secrets in `/root/vulture/.env`.
 
-## Hardening: access token and bind address
+## Hardening: the API has no authentication
 
-Set `APP_TOKEN` in `/root/vulture/.env` to require a token on every `/api/*` call (empty = open), plus
-`TRUST_PROXY_HEADERS=1` behind Caddy. See [docs/lock-down.md](../docs/lock-down.md). The API is also published on
-`127.0.0.1` only (`VULTURE_API_BIND`, default `127.0.0.1:8000`; the deployment uses `127.0.0.1:8001`),
-with Caddy providing TLS. Do not bind it to `0.0.0.0`: ports published by Docker bypass `ufw`.
+The API is published on `127.0.0.1` only (`VULTURE_API_BIND`, default `127.0.0.1:8000`; the
+deployment uses `127.0.0.1:8001`). Keep it behind the reverse proxy (Caddy) and add auth there,
+e.g. `basic_auth`. Do not bind it to `0.0.0.0`: ports published by Docker bypass `ufw`.
 
 ## Hardening: block cloud metadata from containers
 
@@ -82,6 +81,28 @@ anyway; this rule is for the fetch stage.
 
 ## Not covered yet
 
-- Throwaway Vultr instance per scan is implemented (`SANDBOX_MODE=vultr`) but not yet exercised against the live Vultr API; the default is still containers on this VM.
+- Throwaway Vultr instance per scan (today: throwaway containers per scan on this VM).
 - Restricting the docker-proxy: `POST` + `CONTAINERS` is host-root equivalent for whoever controls
-  the API. Keep `APP_TOKEN` secret.
+  the API. Keep the API behind auth.
+
+## Throwaway Vultr VM per scan (`SANDBOX_MODE=vultr`)
+
+With `SANDBOX_MODE=vultr` in `.env`, every scan runs on its own Vultr instance instead of on this
+server (`api/vultr_vm.py`). `SANDBOX_MODE=docker`, the default, keeps the local containers.
+
+1. my.vultr.com → **Account → API**: enable the API and, under **Access Control**, allow only this
+   server's IPv4 (`/32`). Put the key in `/root/vulture/.env` as `VULTR_API_KEY=`.
+2. Set `VULTR_SSH_ALLOW_CIDR=<this server's IPv4>/32` and `SANDBOX_MODE=vultr`, then redeploy.
+
+Per scan the app creates a `vc2-2c-4gb` instance in `sto`, tagged `vulture-scan`, in the
+firewall group `vulture-scan: ssh from app VM only` (created on first use; inbound TCP 22 from
+`VULTR_SSH_ALLOW_CIDR` only). The SSH login key and the SSH host key are generated per scan and
+passed in through cloud-init, so the connection is pinned. Cloud-init installs Docker listening on
+the VM's loopback only, and the app drives it through the SSH tunnel: it builds the worker and
+sinkhole images, runs the fetch stage, blocks all outbound traffic on the VM with iptables
+(Vultr firewalls only filter inbound), runs the sandbox and detonation, and then deletes the
+instance. A janitor deletes `vulture-scan` instances older than `VULTR_MAX_AGE_MIN` (default 60),
+and `VULTR_MAX_VMS` (default 3) caps how many run at once.
+
+A cold VM takes about 3–5 minutes before the scan starts (boot, Docker, image build). To speed it
+up, run one scan, snapshot a VM with Docker and both images built, and set `VULTR_SNAPSHOT_ID`.
