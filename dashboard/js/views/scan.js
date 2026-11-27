@@ -3,7 +3,7 @@ import { $, esc, icon, patch, dur, statusPill, copyText, toast, VERDICT, stamp }
 import { derive } from '../model.js';
 import { agentHtml, typeThought, runsHtml, filmHtml, bindFilm, logHtml } from './parts.js';
 
-const VM_NODES = [['creating', 'Create', 'plus'], ['created', 'Boot', 'power'], ['ready', 'Detonate', 'flask'], ['destroyed', 'Destroyed', 'check']];
+const VM_NODES = [['creating', 'Create', 'plus'], ['created', 'Boot', 'power'], ['ready', 'Ready', 'check'], ['destroyed', 'Destroyed', 'trash']];
 const LIVE = ['queued', 'running'];
 
 export default function scanView(el, id) {

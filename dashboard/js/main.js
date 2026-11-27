@@ -29,11 +29,13 @@ function route() {
   const params = path.match(re).slice(1);
   document.title = title;
   $$('[data-nav]').forEach(a => a.dataset.nav === nav ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current'));
-  swap(() => {
+  const render = () => {
     app.innerHTML = '';
     window.scrollTo(0, 0);
     cleanup = view(app, ...params) || null;
-  });
+  };
+  // The first render has nothing to cross-fade from, and must not wait for a frame to be painted.
+  if (app.firstChild) swap(render); else render();
 }
 
 async function refreshBadge() {

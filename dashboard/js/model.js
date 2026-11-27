@@ -4,6 +4,7 @@
 //   stage investigate, data.tool / data.args / data.thought, then data.stop_reason + data.conclusion (api/investigator.py)
 //   data.retry       attempt counter on whatever was retried
 //   data.lifecycle   what the teardown removed (api/lifecycle.py)
+//   data.limits      the resource caps, announced before the fetch (api/orchestrator.py)
 // and three the backend does not send yet, drawn as soon as they appear:
 //   data.screenshot (+ url, vision), data.approval {id, title, detail, state}, data.run with state "running" | "done"
 
@@ -96,19 +97,25 @@ export function derive(scan) {
     }
   }
 
-  // The furthest pipeline stage reached. VM events are tagged "sandbox" but start before the fetch, so they
-  // don't count. A scan that fails or is cancelled still tears its sandbox down, so for those the stage it
-  // stopped in is the furthest one before "destroy".
+  // The furthest pipeline stage reached. Setting the sandbox up (booting a VM, announcing the resource limits)
+  // is tagged "sandbox" but happens before the fetch, so those events don't move the pipeline forward. A scan
+  // that fails or is cancelled still tears its sandbox down, so for those the stage it stopped in is the
+  // furthest one before "destroy".
   const stopped = scan.status === 'failed' || scan.status === 'cancelled';
-  const idx = e => stageIds.indexOf(e.stage);
-  const counts = e => typeof e.data?.vm !== 'string' || e.stage === 'destroy';
+  const setup = e => typeof e.data?.vm === 'string' || !!e.data?.limits;
   let cur = -1;
-  for (const e of events) if (counts(e) && !(stopped && e.stage === 'destroy')) cur = Math.max(cur, idx(e));
+  for (const e of events) {
+    if (e.stage === 'destroy' ? stopped : setup(e)) continue;
+    cur = Math.max(cur, stageIds.indexOf(e.stage));
+  }
+  // Only setup has happened so far: nothing before "sandbox" may be shown as done.
+  const settingUp = scan.status !== 'done' && cur < 0 && events.some(setup);
   if (cur < 0) cur = stopped ? 0 : stageIds.indexOf(scan.stage);
   if (scan.status === 'done') cur = stageIds.length;
   const destroyed = events.some(e => e.stage === 'destroy');
   stageIds.forEach((id, i) => {
     let state = i < cur ? 'done' : i === cur ? (stopped ? 'fail' : 'on') : 'todo';
+    if (settingUp) state = id === 'sandbox' ? (stopped ? 'fail' : 'on') : 'todo';
     if (stopped && id === 'destroy' && destroyed) state = 'done';
     out.stages.push({ id, label: STAGE_INFO[id]?.label || id, state, retries: retryByStage[id] || 0 });
   });

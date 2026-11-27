@@ -33,6 +33,7 @@ The scan view is driven by `events[].data`. Shapes the backend sends today:
 | `tool`, `args`, `thought` on stage `investigate` | `investigator.py` | investigator steps |
 | `stop_reason`, `conclusion` on stage `investigate` | `investigator.py` | the closing investigator step |
 | `retry` | `investigator.py` | "retried N×" on the stage |
+| `limits` | orchestrator, before the fetch | not drawn; it and the `vm` events do not move the timeline past `sandbox` |
 | `lifecycle` | orchestrator teardown | "Sandbox: destroyed after the scan" in the report |
 
 Shapes the dashboard already draws but nothing sends yet:
