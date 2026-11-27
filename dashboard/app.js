@@ -242,7 +242,7 @@ function reportHtml(s, rep) {
     <h3 style="margin-top:14px">What it tried to do</h3><p>${esc(plainEnglish(rep))}</p>
     ${ai?.recommendation ? `<p><b>Recommendation:</b> ${esc(ai.recommendation)}</p>` : ''}
     ${rep.ai?.error ? `<p class="err">AI review unavailable (${esc(rep.ai.error)}). The verdict above is rule-based only.</p>` : ''}
-    ${cov && !cov.executed ? `<p class="incomplete" style="padding:8px 12px;border-radius:8px"><b>Not enough coverage to call this safe:</b> ${esc(cov.reason)}. The package's own code never ran, so seeing no bad behaviour proves nothing.</p>` : ''}
+    ${cov && !cov.executed ? `<p class="incomplete" style="padding:8px 12px;border-radius:8px"><b>Marked safe, but no package code ran:</b> ${esc(cov.reason)}. Nothing bad was seen because nothing was executed.</p>` : ''}
     <ul>${rep.rules.reasons.map(r => `<li>${esc(r)}</li>`).join('') || '<li>No risky behaviour observed.</li>'}</ul></div>
     ${ai?.indicators?.length ? `<div class="card"><h3>Indicators</h3>${table(ai.indicators, [['Severity', i => `<span class="sev-${esc(i.severity)}">${esc(i.severity)}</span>`], ['Indicator', i => esc(i.title)], ['Evidence', i => esc(i.evidence)]])}</div>` : ''}
     <div class="card"><h3>Persona × clock matrix</h3>${heatmap(ev.matrix)}</div>

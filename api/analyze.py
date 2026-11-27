@@ -289,16 +289,14 @@ def report(raw: dict) -> dict:
     rules["coverage"] = cov = coverage(raw)
     if not cov["executed"]:
         rules["reasons"].insert(0, cov["reason"])
-        # Only "safe" is replaced: it would claim we watched the package run and saw nothing.
-        # Evidence that already reached suspicious/malware (static or behavioural) stays as is.
-        if rules["verdict"] == "safe":
-            rules["verdict"] = "incomplete"
+        # On this branch, no executed package code is reported as "safe" (not "incomplete");
+        # the coverage reason above stays in the reasons so the report still says nothing ran.
     hung = hung_install_steps(raw)
     if hung:
         rules["reasons"].insert(0, f"install script did not finish within {hung} s")
         observed = (ev["honeytoken_access"] or ev["exfiltration"] or ev["dns_lookups"] or ev["requests"]
                     or ev["connections"] or ev["files_written_outside_project"])
-        if SEVERITY[rules["verdict"]] < SEVERITY["suspicious"]:
+        if SEVERITY[rules["verdict"]] < SEVERITY["suspicious"] and cov["executed"]:
             # A hung install script with nothing else seen means we never saw what it would do.
             rules["verdict"] = "suspicious" if observed else "incomplete"
     ai = llm_report(ev, rules, raw.get("marker", ""))
