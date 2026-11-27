@@ -371,7 +371,7 @@ h1, h2, h3, h4, p { margin: 0; }
 .log { font: 400 12px/20px var(--mono); max-height: 420px; overflow: auto; overscroll-behavior: contain; scrollbar-width: thin; }
 .log .l { display: grid; grid-template-columns: 36px 64px minmax(0, 1fr); gap: 8px; }
 .log .l .t { color: var(--ink-3); text-align: right; font-variant-numeric: tabular-nums; }
-.log .l .st { color: var(--ink-3); }
+.log .l .st { color: var(--ink-3); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .log .l .m { color: var(--ink-2); overflow-wrap: anywhere; }
 .log .l.bad .m { color: var(--red); }
 .log .l.ai .m, .log .l.vm .m { color: var(--ink); }

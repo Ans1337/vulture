@@ -70,11 +70,24 @@ export function bindFilm(root, shots) {
   });
 }
 
+// Short names so the stage column stays narrow: "investigate" does not fit next to the message.
+const LOG_STAGE = { investigate: 'agent', analyze: 'verdict' };
+
+/** Red only for what went wrong or what the package did: never for words that merely appear in a path or a tool call. */
+function isBad(e) {
+  const d = e.data || {}, msg = e.msg || '';
+  if (d.vm === 'destroy_failed' || d.limit_hit || (d.lifecycle && d.lifecycle.destroyed === false)) return true;
+  if (d.honeytoken_hits > 0) return true;
+  if (d.tool || d.retry) return false; // investigator steps quote code and paths; a retry is not a failure
+  return /^verdict: (MALWARE|SUSPICIOUS)\b/.test(msg) || /\bFAILED\b/.test(msg) || /[1-9]\d* honeytoken hits/.test(msg);
+}
+
 export function logHtml(events) {
   if (!events.length) return '<div class="empty">Waiting for the first event</div>';
   return events.map(e => {
     const vm = typeof e.data?.vm === 'string';
-    const cls = /error|fail|limit hit|[1-9]\d* honeytoken hits|MALWARE/i.test(e.msg) ? 'bad' : e.stage === 'investigate' || vm ? 'ai' : '';
-    return `<div class="l ${cls}"><span class="t">${dur(e.t)}</span><span class="st">${esc(vm ? 'vm' : e.stage)}</span><span class="m">${esc(e.msg)}</span></div>`;
+    const cls = isBad(e) ? 'bad' : e.stage === 'investigate' || vm ? 'ai' : '';
+    const stage = vm ? 'vm' : LOG_STAGE[e.stage] || e.stage;
+    return `<div class="l ${cls}"><span class="t">${dur(e.t)}</span><span class="st" title="${esc(e.stage)}">${esc(stage)}</span><span class="m">${esc(e.msg)}</span></div>`;
   }).join('');
 }
