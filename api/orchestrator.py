@@ -45,15 +45,15 @@ log = logging.getLogger("vulture.orchestrator")
 Emit = Callable[[str, str, dict], None]  # (stage, message, data)
 
 
-def _stream(container, emit: Emit, timeout: int, cancel=None) -> dict:
+def _stream(container, emit: Emit, timeout: float, cancel=None) -> dict:
     """Follow PROGRESS/RESULT lines from a worker container."""
     result: dict = {}
-    deadline = time.time() + max(1, timeout)
+    deadline = time.monotonic() + timeout
     timed_out = threading.Event()
 
     def watchdog():
-        while time.time() < deadline:
-            time.sleep(1)
+        while (left := deadline - time.monotonic()) > 0:
+            time.sleep(min(1, left))
             if cancel is not None and cancel.is_set():
                 break
             try:
@@ -87,7 +87,7 @@ def _stream(container, emit: Emit, timeout: int, cancel=None) -> dict:
                 elif text.strip():
                     other = (other + [text])[-15:]
     except (docker.errors.APIError, docker.errors.NotFound, OSError):
-        if time.time() < deadline and not (cancel is not None and cancel.is_set()):
+        if time.monotonic() < deadline and not (cancel is not None and cancel.is_set()):
             raise  # only swallow the stream breaking because the watchdog removed the container
     oom = False
     try:
@@ -115,15 +115,15 @@ def _stream(container, emit: Emit, timeout: int, cancel=None) -> dict:
 def _run_in(client, scan_id: str, source: str, upload: Optional[tuple[str, bytes]], emit: Emit, cancel,
             investigate) -> dict:
     """One scan = one throwaway environment. Hard caps on time and memory; destroyed in `finally`."""
-    started = time.time()
+    started = time.monotonic()
     labels = {lifecycle.LABEL: scan_id}
     marker = "VLT" + secrets.token_hex(6).upper()
 
-    def remaining(stage_cap: int) -> int:
+    def remaining(stage_cap: float) -> float:
         """Seconds this stage may run: its own cap, but never past the scan-wide deadline."""
         if cancel is not None and cancel.is_set():
             raise Cancelled()
-        left = int(L.scan_timeout - (time.time() - started))
+        left = L.scan_timeout - (time.monotonic() - started)
         if left <= 0:
             raise TimeoutError(f"scan exceeded its {L.scan_timeout}s total time limit")
         return min(stage_cap, left)
@@ -204,14 +204,17 @@ def _run_in(client, scan_id: str, source: str, upload: Optional[tuple[str, bytes
 
         # 5b. The AI investigator may poke around and re-run the package while the sandbox is still alive.
         if investigate is not None:
-            ctx = Investigation(client, vol.name, net.name, sink, sink_ip, marker, fetched, labels, remaining, cancel)
+            ctx = Investigation(client, vol.name, net.name, sink, sink_ip, raw, labels, remaining, cancel)
             try:
                 raw["investigation"] = investigate(ctx, raw, emit)
             except Cancelled:
                 raise
             except Exception:
                 log.exception("investigator failed")
+                raw["investigation"] = {"stop_reason": "internal_error", "steps": []}
                 emit("investigate", "investigator stopped early (internal error); continuing with the evidence so far", {})
+            if ctx.cancelled():
+                raise Cancelled()
         return raw
     finally:
         # Lifecycle: the environment never outlives the scan. Found by label, then verified gone.
@@ -223,44 +226,57 @@ def _run_in(client, scan_id: str, source: str, upload: Optional[tuple[str, bytes
         emit("destroy", "sandbox destroyed: " + (
             f"{report['containers']} containers, {report['networks']} network, {report['volumes']} volume removed"
             if report["destroyed"] else f"FAILED, leftover: {', '.join(report['leftover'])}"),
-            {"lifecycle": report, "elapsed_s": round(time.time() - started, 1)})
+            {"lifecycle": report, "elapsed_s": round(time.monotonic() - started, 1)})
 
 
 class Investigation:
     """What the AI investigator may do while the sandbox is alive. All of it runs in labelled,
     resource-capped containers, so it is torn down with the scan."""
 
-    def __init__(self, client, vol, net, sink, sink_ip, marker, fetched, labels, remaining, cancel):
+    def __init__(self, client, vol, net, sink, sink_ip, raw, labels, remaining, cancel):
         self.client, self.vol, self.net, self.sink, self.sink_ip = client, vol, net, sink, sink_ip
-        self.marker, self.fetched, self.labels, self.remaining, self.cancel = marker, fetched, labels, remaining, cancel
+        self.raw, self.labels, self.scan_remaining, self.cancel = raw, labels, remaining, cancel
+        self.deadline = time.monotonic() + L.investigator_timeout
         self._seen_sink = len(sink.logs().decode(errors="replace").splitlines())
+
+    def remaining(self, cap: float) -> float:
+        left = min(self.scan_remaining(cap), self.deadline - time.monotonic())
+        if left <= 0:
+            raise TimeoutError("investigation deadline reached")
+        return left
 
     def cancelled(self) -> bool:
         return self.cancel is not None and self.cancel.is_set()
 
     def inspect(self, cmd: str, arg: str) -> str:
         """Read-only look at the package: no network, read-only volume, tiny limits, short deadline."""
+        self.remaining(30)
         c = self.client.containers.create(
             WORKER_IMAGE, ["/opt/scan/inspect_tool.py", cmd, arg] if arg else ["/opt/scan/inspect_tool.py", cmd],
             network_mode="none", volumes={self.vol: {"bind": "/work", "mode": "ro"}}, read_only=True,
             mem_limit="128m", memswap_limit="128m", nano_cpus=L.nano(0.5), pids_limit=64,
             cap_drop=["ALL"], security_opt=SECURITY_OPT, labels=self.labels)
+        self.remaining(30)
         c.start()
         try:
-            c.wait(timeout=min(30, max(1, self.remaining(30))))
+            c.wait(timeout=self.remaining(30))
         except Exception:
             c.kill()
+            self.remaining(30)
+            raise
         return c.logs(stdout=True, stderr=True).decode(errors="replace")[:12000]
 
     def rerun(self, persona: str, clock: str) -> dict:
         """One more detonation: a single persona x clock, same isolation as the first."""
+        self.remaining(300)
         det = self.client.containers.create(
             WORKER_IMAGE, ["/opt/scan/detonate.py"], network=self.net, dns=[self.sink_ip],
-            environment={"MARKER": self.marker, "PERSONAS": persona, "CLOCKS": clock, "STEP_TIMEOUT": STEP_TIMEOUT},
+            environment={"MARKER": self.raw["marker"], "PERSONAS": persona, "CLOCKS": clock, "STEP_TIMEOUT": STEP_TIMEOUT},
             volumes={self.vol: {"bind": "/work", "mode": "ro"}},
             read_only=True, tmpfs={"/tmp": f"rw,exec,size={L.tmpfs_size},uid=1000"},
             mem_limit=L.detonate_mem, memswap_limit=L.detonate_mem, nano_cpus=L.nano(L.detonate_cpus),
             pids_limit=L.pids, cap_drop=["ALL"], security_opt=SECURITY_OPT, labels=self.labels)
+        self.remaining(300)
         det.start()
         res = _stream(det, lambda *a: None, self.remaining(min(L.detonate_timeout, 300)), self.cancel)
         lines = self.sink.logs().decode(errors="replace").splitlines()
@@ -274,8 +290,10 @@ class Investigation:
             if ev.get("kind") != "ready":
                 events.append(ev)
         import analyze
-        e = analyze.evidence({"marker": self.marker, "fetch": self.fetched, "detonate": res, "sinkhole": events})
-        return {"persona": persona, "clock": clock, "error": res.get("error"), "honeytoken_access": e["honeytoken_access"][:15],
+        self.raw.setdefault("followups", []).append({"persona": persona, "clock": clock, "detonate": res, "sinkhole": events})
+        e = analyze.evidence({"marker": self.raw["marker"], "fetch": {}, "detonate": res, "sinkhole": events})
+        return {"persona": persona, "clock": clock, "error": res.get("error"), "runs": analyze.run_outputs(res),
+                "honeytoken_access": e["honeytoken_access"][:15],
                 "exfiltration": e["exfiltration"][:10], "dns_lookups": e["dns_lookups"][:15],
                 "processes": e["processes"][:15], "requests": e["requests"][:10]}
 

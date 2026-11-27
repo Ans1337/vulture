@@ -1,5 +1,5 @@
 """Storage / cancel / dedupe (Part 2), Vultr VM lifecycle (Part 5), investigator loop (Part 6). No Docker, no network."""
-import json, os, sys, tempfile, threading, time, types, unittest
+import asyncio, json, os, sys, tempfile, threading, time, types, unittest
 from unittest import mock
 
 os.environ.update(VULTURE_DB=os.path.join(tempfile.mkdtemp(), "p.db"), APP_TOKEN="t" * 32, RATE_API_PER_MIN="10000",
@@ -205,9 +205,10 @@ class Msg:
 
 class FakeLLM:
     def __init__(self, script): self.script, self.seen = list(script), []
-    def create(self, **kw):
+    async def create(self, **kw):
         self.seen.append(kw["messages"][-1])
         x = self.script.pop(0)
+        if callable(x): x = await x()
         if isinstance(x, Exception): raise x
         return types.SimpleNamespace(choices=[types.SimpleNamespace(message=x)])
 
@@ -224,11 +225,11 @@ RAW = {"marker": "M", "fetch": {"meta": {}, "static": {}}, "detonate": {"runs": 
 
 
 class InvestigatorTest(unittest.TestCase):
-    def run_loop(self, script, ctx=None):
+    def run_loop(self, script, ctx=None, raw=RAW):
         llm = FakeLLM(script); events = []
-        client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=llm))
+        client = mock.MagicMock(chat=types.SimpleNamespace(completions=llm))
         with mock.patch.object(investigator, "_client", return_value=(client, "m")):
-            out = investigator.investigate(ctx or Ctx(), RAW, lambda s, m, d: events.append((s, m, d)))
+            out = investigator.investigate(ctx or Ctx(), raw, lambda s, m, d: events.append((s, m, d)))
         return out, events, llm
 
     def test_agent_inspects_reruns_and_concludes(self):
@@ -236,36 +237,98 @@ class InvestigatorTest(unittest.TestCase):
         out, events, llm = self.run_loop([
             Msg("check the gate", [("grep", {"pattern": "Date"})]),
             Msg("", [("rerun", {"persona": "ci", "clock": "+90d"})]),
-            Msg('{"findings": ["steals on ci"], "leaning": "malware"}')], ctx)
+            Msg('{"findings": ["steals on ci"], "leaning": "malware", "unexplained": []}')], ctx)
         self.assertEqual([x[0] for x in ctx.log], ["grep", "rerun"])
         self.assertEqual(out["conclusion"]["leaning"], "malware")
         self.assertEqual((out["steps_used"], out["reruns"]), (2, 1))
+        self.assertEqual(out["stop_reason"], "concluded")
+        self.assertIn("exfiltration", llm.seen[-1]["content"])
         self.assertTrue(any("rerun(persona=ci" in e[1] for e in events))        # streamed to the UI
 
     def test_rerun_args_validated_and_budgeted(self):
         ctx = Ctx(); calls = [("rerun", {"persona": "root", "clock": "0"}), ("rerun", {"persona": "ci", "clock": "tomorrow"})]
         calls += [("rerun", {"persona": "ci", "clock": f"+{i}d"}) for i in range(1, 6)]
-        out, *_ = self.run_loop([Msg("", calls), Msg('{"leaning": "safe"}')], ctx)
+        out, *_ = self.run_loop([Msg("", calls), Msg('{"leaning": "safe", "unexplained": []}')], ctx)
         self.assertEqual(len([x for x in ctx.log if x[0] == "rerun"]), investigator.MAX_RERUNS)
         self.assertIn("invalid", out["steps"][0]["result"])
+        self.assertEqual(out["stop_reason"], "rerun_limit")
+        self.assertIn("clock=+4d", out["unanswered"][0])
+
+    def test_baseline_can_be_enough_without_any_followup(self):
+        out, _, llm = self.run_loop([Msg('{"leaning":"safe","unexplained":[]}')])
+        self.assertEqual((out["stop_reason"], out["reruns"], len(llm.seen)), ("concluded", 0, 1))
+
+    def test_final_turn_cannot_run_another_tool(self):
+        ctx = Ctx()
+        call = Msg("", [("rerun", {"persona": "ci", "clock": "0"})])
+        out, _, llm = self.run_loop([call] * 4, ctx)
+        self.assertEqual((out["stop_reason"], len(ctx.log), len(llm.seen)), ("rerun_limit", 3, 4))
+        self.assertIsNone(out["conclusion"])
+
+    def test_inflight_inference_is_cancelled_at_deadline(self):
+        sink = mock.Mock()
+        sink.logs.return_value = b""
+        ctx = orchestrator.Investigation(None, None, None, sink, None, RAW, {}, lambda cap: cap, None)
+        cancelled = []
+        async def stalled():
+            try:
+                await asyncio.Event().wait()
+            finally:
+                cancelled.append(True)
+        ctx.deadline = time.monotonic() + 0.1
+        out, _, llm = self.run_loop([stalled], ctx)
+        self.assertEqual((out["stop_reason"], len(llm.seen), out["reruns"]), ("timeout", 1, 0))
+        self.assertEqual(cancelled, [True])
+
+    def test_deadline_between_batched_tools_preserves_the_first_result(self):
+        ctx = Ctx()
+        def remaining(cap):
+            if ctx.log:
+                raise TimeoutError
+            return cap
+        ctx.remaining = remaining
+        calls = [("rerun", {"persona": "ci", "clock": clock}) for clock in ("0", "+7d")]
+        out, *_ = self.run_loop([Msg("", calls)], ctx)
+        self.assertEqual((out["stop_reason"], out["reruns"], len(out["steps"])), ("timeout", 1, 1))
+        self.assertIn("+7d", out["unanswered"][0])
+
+    def test_followup_observations_and_model_questions_reach_the_verdict(self):
+        run = {"name": "ci", "steps": [{"label": "entry", "exit": 0, "output": "[vulture] loading index.js"}]}
+        raw = {**RAW, "investigation": {"conclusion": {"unexplained": ["Which config is missing?"]}},
+               "followups": [{"persona": "ci", "clock": "0", "detonate": {"runs": [run]},
+                              "sinkhole": [{"kind": "http", "body": RAW["marker"]}]}]}
+        with mock.patch.object(analyze, "llm_report", return_value=None):
+            rep = analyze.report(raw)
+        self.assertEqual(rep["verdict"], "malware")
+        self.assertTrue(rep["rules"]["coverage"]["executed"])
+        self.assertIn("ci (follow-up 1)", rep["evidence"]["matrix"])
+        self.assertEqual(rep["rules"]["unresolved"], ["Which config is missing?"])
+
+    def test_timeout_without_conclusion_identifies_unverified_findings(self):
+        finding = {"file": "index.js", "line": 4, "capability": "evasion", "severity": "medium", "rule": "ci_check"}
+        raw = {**RAW, "investigation": {"stop_reason": "timeout"}, "fetch": {"static": {"findings": [finding]}}}
+        with mock.patch.object(analyze, "llm_report", return_value=None):
+            gaps = analyze.report(raw)["rules"]["unresolved"]
+        self.assertEqual(sum("index.js:4 (ci_check)" in item for item in gaps), 1)
 
     def test_model_failures_retry_then_stop(self):
         out, events, _ = self.run_loop([RuntimeError("x")] * 3)
-        self.assertEqual(out["steps"], []); self.assertEqual(sum("retrying" in e[1] for e in events), 3)
+        self.assertEqual(out["steps"], []); self.assertEqual(sum("retrying" in e[1] for e in events), 2)
+        self.assertEqual(out["stop_reason"], "model_error")
 
     def test_bad_final_json_asks_again(self):
-        out, *_ = self.run_loop([Msg("no json here"), Msg('{"leaning": "safe"}')])
-        self.assertEqual(out["conclusion"], {"leaning": "safe"})
+        out, *_ = self.run_loop([Msg("no json here"), Msg('{"leaning": "safe", "unexplained": []}')])
+        self.assertEqual(out["conclusion"], {"leaning": "safe", "unexplained": []})
 
     def test_step_budget_is_enforced(self):
         script = [Msg("", [("list_files", {})]) for _ in range(investigator.MAX_STEPS)]
-        out, events, _ = self.run_loop(script)
+        out, events, _ = self.run_loop(script + [Msg('{"leaning": "safe", "unexplained": []}')])
         self.assertEqual(out["steps_used"], investigator.MAX_STEPS)
         self.assertTrue(any("budget" in e[1] for e in events))
 
     def test_tool_errors_go_back_to_the_model(self):
         ctx = Ctx(); ctx.inspect = mock.Mock(side_effect=OSError("disk"))
-        out, *_ = self.run_loop([Msg("", [("read_file", {"path": "a"})]), Msg('{"leaning":"safe"}')], ctx)
+        out, *_ = self.run_loop([Msg("", [("read_file", {"path": "a"})]), Msg('{"leaning": "safe", "unexplained": []}')], ctx)
         self.assertIn("tool error", out["steps"][0]["result"])
 
     def test_skipped_without_inference_key(self):
@@ -278,8 +341,8 @@ class InvestigatorTest(unittest.TestCase):
         class C(Ctx):
             def inspect(self, cmd, arg): return "found MARK in file"
         raw = {**RAW, "marker": "MARK"}
-        llm = FakeLLM([Msg("", [("read_file", {"path": "a"})]), Msg('{"leaning": "safe"}')])
-        client = types.SimpleNamespace(chat=types.SimpleNamespace(completions=llm))
+        llm = FakeLLM([Msg("", [("read_file", {"path": "a"})]), Msg('{"leaning": "safe", "unexplained": []}')])
+        client = mock.MagicMock(chat=types.SimpleNamespace(completions=llm))
         with mock.patch.object(investigator, "_client", return_value=(client, "m")):
             out = investigator.investigate(C(), raw, lambda *a: None)
         self.assertNotIn("MARK", json.dumps(llm.seen)); self.assertNotIn("MARK", out["steps"][0]["result"])
