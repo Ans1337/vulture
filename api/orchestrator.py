@@ -22,6 +22,10 @@ SINKHOLE_IMAGE = os.environ.get("SINKHOLE_IMAGE", "vulture-sinkhole:latest")
 PERSONAS = os.environ.get("SCAN_PERSONAS", "developer,ci")
 CLOCKS = os.environ.get("SCAN_CLOCKS", "0,+90d")
 STEP_TIMEOUT = os.environ.get("SCAN_STEP_TIMEOUT", "60")
+# no-new-privileges blocks every exec on hosts where AppArmor can't transition under it
+# (e.g. Docker installed via snap). Set SANDBOX_NO_NEW_PRIVILEGES=0 there; the worker image
+# has no setuid binaries and all capabilities are dropped, so the sandbox stays locked down.
+SECURITY_OPT = ["no-new-privileges"] if os.environ.get("SANDBOX_NO_NEW_PRIVILEGES", "1") != "0" else []
 
 Emit = Callable[[str, str, dict], None]  # (stage, message, data)
 
@@ -47,6 +51,7 @@ def _stream(container, emit: Emit, timeout: int) -> dict:
 
     threading.Thread(target=watchdog, daemon=True).start()
     buf = b""
+    other: list[str] = []  # anything that isn't PROGRESS/RESULT (tracebacks, npm errors)
     for chunk in container.logs(stream=True, follow=True):
         buf += chunk
         while b"\n" in buf:
@@ -57,8 +62,16 @@ def _stream(container, emit: Emit, timeout: int) -> dict:
                 emit(d.pop("stage"), d.pop("msg"), d)
             elif text.startswith("RESULT "):
                 result = json.loads(text[7:])
+            elif text.strip():
+                other = (other + [text])[-15:]
     if not result:
-        result = {"error": "worker produced no result (timed out or crashed)"}
+        try:
+            container.reload()
+            code = container.attrs.get("State", {}).get("ExitCode")
+        except Exception:
+            code = "?"
+        tail = "\n".join(other[-10:]) or "(no output)"
+        result = {"error": f"worker produced no result (exit code {code}). Last output:\n{tail}"}
     return result
 
 
@@ -74,7 +87,7 @@ def run_scan(scan_id: str, source: str, upload: Optional[tuple[str, bytes]], emi
         fetch = client.containers.create(
             WORKER_IMAGE, ["/opt/scan/fetch.py", "upload" if upload else source],
             volumes={vol.name: {"bind": "/work", "mode": "rw"}},
-            mem_limit="1g", pids_limit=512, cap_drop=["ALL"], security_opt=["no-new-privileges"],
+            mem_limit="1g", pids_limit=512, cap_drop=["ALL"], security_opt=SECURITY_OPT,
             labels={"vulture.scan": scan_id})
         created.append(fetch)
         if upload:
@@ -116,7 +129,7 @@ def run_scan(scan_id: str, source: str, upload: Optional[tuple[str, bytes]], emi
             volumes={vol.name: {"bind": "/work", "mode": "ro"}},
             read_only=True, tmpfs={"/tmp": "rw,exec,size=1g,uid=1000"},
             mem_limit="1g", nano_cpus=2_000_000_000, pids_limit=512,
-            cap_drop=["ALL"], security_opt=["no-new-privileges"], labels={"vulture.scan": scan_id})
+            cap_drop=["ALL"], security_opt=SECURITY_OPT, labels={"vulture.scan": scan_id})
         created.append(det)
         det.start()
         detonated = _stream(det, emit, 1800)

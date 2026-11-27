@@ -13,7 +13,9 @@ RUN ln -s ../lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
     && ln -s ../lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
     && mkdir -p /work && chown ubuntu:ubuntu /work
 COPY *.py /opt/scan/
-RUN chmod -R a+rX /opt/scan
+RUN chmod -R a+rX /opt/scan \
+    # no setuid/setgid binaries: nothing in the sandbox can regain root
+    && find / -xdev -perm /6000 -type f -exec chmod a-s {} + 2>/dev/null || true
 ENV NPM_CONFIG_UPDATE_NOTIFIER=false NPM_CONFIG_AUDIT=false NPM_CONFIG_FUND=false PYTHONUNBUFFERED=1 PYTHONPATH=/opt/scan
 # Unprivileged user (uid 1000) that ships with the Ubuntu image.
 USER ubuntu
