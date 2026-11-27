@@ -1,7 +1,10 @@
 """Vulture MVP API: start a scan, poll its progress, read the report. Serves the web UI."""
 from __future__ import annotations
 
+import hashlib
+import hmac
 import re
+import secrets
 import threading
 import time
 import traceback
@@ -9,7 +12,7 @@ import uuid
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, UploadFile
 from fastapi.staticfiles import StaticFiles
 
 import analyze
@@ -36,6 +39,25 @@ def valid_source(src: str) -> bool:
     return bool(m) and m.group(2) not in (".", "..") and ".." not in (m.group(3) or "")
 
 
+# Personal nonce: each user keeps a secret nonce and sends it as X-Vulture-Nonce. A scan is owned by the SHA-256
+# of the nonce that created it (the nonce itself is never stored) and is invisible without it.
+NONCE_RE = re.compile(r"[A-Za-z0-9_-]{32,128}")
+
+
+def current_owner(x_vulture_nonce: str = Header("")) -> str:
+    if not NONCE_RE.fullmatch(x_vulture_nonce):
+        raise HTTPException(401, "missing or invalid personal nonce (send X-Vulture-Nonce; get one from POST /api/nonce)")
+    return hashlib.sha256(x_vulture_nonce.encode()).hexdigest()
+
+
+def own_scan(sid: str, owner: str) -> dict:
+    """404 both for missing scans and for someone else's, so ids can't be probed."""
+    scan = SCANS.get(sid)
+    if not scan or not hmac.compare_digest(scan["owner"], owner):
+        raise HTTPException(404, "no such scan")
+    return scan
+
+
 def _run(scan: dict, upload: Optional[tuple[str, bytes]]):
     def emit(stage, msg, data):
         scan["stage"] = stage
@@ -55,7 +77,8 @@ def _run(scan: dict, upload: Optional[tuple[str, bytes]]):
 
 
 @app.post("/api/scans", status_code=201)
-async def create_scan(source: str = Form(""), file: Optional[UploadFile] = File(None)):
+async def create_scan(source: str = Form(""), file: Optional[UploadFile] = File(None),
+                      owner: str = Depends(current_owner)):
     upload = None
     if file is not None and file.filename:
         data = await file.read(MAX_UPLOAD + 1)
@@ -71,23 +94,30 @@ async def create_scan(source: str = Form(""), file: Optional[UploadFile] = File(
                                  "name@latest), a GitHub URL (https://github.com/owner/repo[#ref]), or upload a file")
     sid = uuid.uuid4().hex[:10]
     scan = {"id": sid, "source": source, "status": "queued", "stage": None, "created": time.time(),
-            "events": [], "report": None, "error": None}
+            "events": [], "report": None, "error": None, "owner": owner}
     SCANS[sid] = scan
     threading.Thread(target=_run, args=(scan, upload), daemon=True).start()
     return {"id": sid}
 
 
+@app.post("/api/nonce")
+def issue_nonce():
+    """Mint a personal nonce (256 random bits). Nothing is stored; it becomes an identity when a scan is created
+    with it. It can't be recovered or reset, so the client must keep it."""
+    return {"nonce": secrets.token_urlsafe(32)}
+
+
 @app.get("/api/scans")
-def list_scans():
+def list_scans(owner: str = Depends(current_owner)):
+    mine = (s for s in SCANS.values() if hmac.compare_digest(s["owner"], owner))
     return [{k: s[k] for k in ("id", "source", "status", "created")} | {"verdict": (s["report"] or {}).get("verdict")}
-            for s in sorted(SCANS.values(), key=lambda s: -s["created"])]
+            for s in sorted(mine, key=lambda s: -s["created"])]
 
 
 @app.get("/api/scans/{sid}")
-def get_scan(sid: str):
-    if sid not in SCANS:
-        raise HTTPException(404)
-    return SCANS[sid] | {"stages": STAGES}
+def get_scan(sid: str, owner: str = Depends(current_owner)):
+    scan = own_scan(sid, owner)
+    return {k: v for k, v in scan.items() if k != "owner"} | {"stages": STAGES}
 
 
 app.mount("/", StaticFiles(directory=Path(__file__).parent.parent / "dashboard", html=True), name="ui")

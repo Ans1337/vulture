@@ -41,7 +41,7 @@
 </head>
 <body>
 <div class="wrap">
-  <h1>🦅 Vulture</h1>
+  <h1>🦅 Vulture <a href="#" id="key-btn" style="font-size:13px;font-weight:normal;float:right" title="Your personal key keeps your scans private">Your key</a></h1>
   <div class="sub">Is this package safe to install? We detonate it in a sandbox full of fake secrets and a fake internet, then an AI agent writes the verdict.</div>
 
   <div class="card">
@@ -61,6 +61,25 @@
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let current = null, timer = null;
+
+// Personal nonce: your private key to your own scans. Minted by the server once and kept only in this browser.
+// Lose it and your scans are unreachable; share it and whoever has it sees them.
+async function api(url, opts = {}) {
+  let n = localStorage.getItem('vultureNonce');
+  if (!n) {
+    const r = await fetch('/api/nonce', { method: 'POST' });
+    if (!r.ok) throw new Error('could not get a personal key');
+    localStorage.setItem('vultureNonce', n = (await r.json()).nonce);
+  }
+  return fetch(url, { ...opts, headers: { ...(opts.headers || {}), 'X-Vulture-Nonce': n } });
+}
+$('#key-btn').onclick = e => {
+  e.preventDefault();
+  const v = prompt('Your personal key (keep it secret; it is the only way to see your scans). Paste a saved key to use it on this device:', localStorage.getItem('vultureNonce') || '');
+  if (v === null || !v.trim()) return;
+  if (!/^[A-Za-z0-9_-]{32,128}$/.test(v.trim())) return alert('Not a valid key (32-128 letters, digits, - or _).');
+  localStorage.setItem('vultureNonce', v.trim()); clearInterval(timer); $('#scan').innerHTML = ''; recent();
+};
 document.querySelectorAll('[data-v]').forEach(c => c.onclick = () => $('#source').value = c.dataset.v);
 
 $('#f').onsubmit = async e => {
@@ -70,7 +89,7 @@ $('#f').onsubmit = async e => {
   if ($('#file').files[0]) fd.append('file', $('#file').files[0]);
   $('#go').disabled = true;
   try {
-    const r = await fetch('/api/scans', { method: 'POST', body: fd });
+    const r = await api('/api/scans', { method: 'POST', body: fd });
     const j = await r.json();
     if (!r.ok) throw new Error(j.detail || r.statusText);
     openScan(j.id);
@@ -81,7 +100,7 @@ $('#f').onsubmit = async e => {
 function openScan(id) { current = id; location.hash = id; clearInterval(timer); poll(); timer = setInterval(poll, 1200); }
 
 async function poll() {
-  const r = await fetch('/api/scans/' + current); if (!r.ok) return;
+  const r = await api('/api/scans/' + current); if (!r.ok) return;
   const s = await r.json(); render(s);
   if (s.status === 'done' || s.status === 'failed') clearInterval(timer);
   recent();
@@ -128,7 +147,7 @@ function render(s) {
 }
 
 async function recent() {
-  const r = await fetch('/api/scans'); const list = await r.json();
+  const r = await api('/api/scans'); if (!r.ok) return; const list = await r.json();
   $('#recent').innerHTML = list.map(s => `<a href="#${s.id}" onclick="openScan('${s.id}')"><span>${esc(s.source)}</span><span class="${s.verdict || ''}">${esc(s.verdict ? s.verdict.toUpperCase() : s.status)}</span></a>`).join('') || 'None yet.';
 }
 recent();
