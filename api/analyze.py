@@ -182,24 +182,39 @@ def llm_report(ev: dict, rules: dict, marker: str = "") -> dict | None:
     if marker:
         content = content.replace(marker, "<HONEYTOKEN>")   # Audit #27: never send the scan marker out
     content = content[:60000]
-    last = "no reply"
+    last, diag = "no reply", {}
     for _ in range(2):
         try:
             r = client.chat.completions.create(model=model, temperature=0.1, max_tokens=1500,
                                                messages=[{"role": "system", "content": PROMPT},
                                                          {"role": "user", "content": content}])
-            text = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S)
+            raw_text = r.choices[0].message.content or ""
+            diag = _diag(r, raw_text, marker)
+            text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.S)
             m = re.search(r"\{.*\}", text, re.S)
             if not m:
                 last = "model reply failed validation: no JSON object in reply"
                 continue
             try:
-                return validate_ai(json.loads(m.group(0)))
+                return validate_ai(json.loads(m.group(0))) | diag
             except ValueError as e:   # json.JSONDecodeError is a ValueError too
                 last = f"model reply failed validation: {e}"
         except Exception as e:
             last = f"model failed: {e}"
-    return {"error": str(last)[:500]}
+    return {"error": str(last)[:500]} | diag
+
+
+def _diag(r, raw_text: str, marker: str) -> dict:
+    """What the model actually sent back (first 2000 chars, marker masked), to debug bad replies."""
+    excerpt = raw_text[:2000]
+    if marker:
+        excerpt = excerpt.replace(marker, "<HONEYTOKEN>")
+    u = getattr(r, "usage", None)
+    details = getattr(u, "completion_tokens_details", None) if u else None
+    return {"raw_excerpt": excerpt, "raw_length": len(raw_text),
+            "finish_reason": getattr(r.choices[0], "finish_reason", None),
+            "completion_tokens": getattr(u, "completion_tokens", None) if u else None,
+            "reasoning_tokens": getattr(details, "reasoning_tokens", None) if details else None}
 
 
 def report(raw: dict) -> dict:
