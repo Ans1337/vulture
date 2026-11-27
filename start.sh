@@ -11,4 +11,5 @@ BIND="${VULTURE_API_BIND:-$(sed -n 's/^VULTURE_API_BIND=//p' .env 2>/dev/null | 
 BIND="${BIND:-127.0.0.1:8000}"
 case "$BIND" in *:*) ;; *) BIND="0.0.0.0:$BIND" ;; esac   # a bare port binds all interfaces
 echo "Vulture is running: http://${BIND/0.0.0.0/localhost} (bound to $BIND)"
-case "$BIND" in 127.0.0.1:*) ;; *) echo "WARNING: the API has no authentication and is reachable on $BIND." ;; esac
+case "$BIND" in 127.0.0.1:*) ;; *) echo "WARNING: the API is reachable on $BIND. Set APP_TOKEN and put TLS (a reverse proxy) in front before exposing it." ;; esac
+grep -qE '^APP_TOKEN=.+' .env || echo "NOTE: no APP_TOKEN set, so the API is open. Add APP_TOKEN to .env to require a token."

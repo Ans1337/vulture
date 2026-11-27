@@ -3,4 +3,3 @@ uvicorn==0.34.0
 python-multipart==0.0.20
 docker==7.1.0
 openai==1.58.1
-paramiko==3.5.0
