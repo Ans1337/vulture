@@ -1,0 +1,25 @@
+# Vulture MVP. Start everything with ./start.sh, then open http://localhost:8000
+services:
+  api:
+    build: { context: ., dockerfile: api/Dockerfile }
+    env_file: .env
+    environment:
+      DOCKER_HOST: tcp://docker-proxy:2375
+    ports: ["${VULTURE_API_BIND:-8000}:8000"]
+    depends_on: [docker-proxy]
+
+  # The API only reaches Docker through this filtered proxy, never the raw socket.
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:0.3.0
+    environment: { DISABLE_IPV6: 1, CONTAINERS: 1, POST: 1, NETWORKS: 1, VOLUMES: 1, IMAGES: 0, EXEC: 0, BUILD: 0 }
+    volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+
+  # Build-only images used inside the sandbox
+  worker:
+    build: ./sandbox-images/worker
+    image: vulture-worker:latest
+    profiles: [build]
+  sinkhole:
+    build: ./sandbox-images/sinkhole
+    image: vulture-sinkhole:latest
+    profiles: [build]

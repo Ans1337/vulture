@@ -4,7 +4,27 @@
 detonates it in an isolated sandbox on Vultr full of fake secrets and a fake internet, watches what it
 does, and has an AI agent write a **Safe / Malware report**.
 
-> Status: empty skeleton. The idea is being finalised; nothing is implemented yet.
+> Status: **MVP**. Scans npm packages, GitHub repos and uploads in Docker sandboxes on your machine.
+> Pushes to `main` test and deploy the app to the existing Vultr VM once [production deployment](infra/README.md) is configured.
+> Not yet: throwaway Vultr VM per scan, browser/screenshot step, approval gates.
+
+## Run it (needs Docker Desktop)
+
+```bash
+./start.sh            # builds the sandbox images, starts the app
+open http://localhost:8000
+```
+
+`start.sh` creates `.env` from `.env.example` on first run. Add `VULTR_INFERENCE_API_KEY` and
+`AGENT_MODEL` there to get the AI verdict; without them you get the rule-based verdict.
+After editing `.env`: `docker compose up -d api`.
+
+To see it catch something, upload `samples/fake-malware/fake-stealer.tgz` (created by `start.sh`).
+It's **harmless fake malware**: it steals the planted fake secrets and sends them to a made-up host
+that only exists inside the sandbox, and it has a time bomb that only fires 60+ days later outside CI.
+Vulture catches both.
+
+Stop it: `docker compose down`.
 
 ## Pipeline
 
@@ -22,10 +42,10 @@ does, and has an AI agent write a **Safe / Malware report**.
 ## Repo layout
 
 ```
-api/              backend API: start scans, stream progress (REST + WebSocket)
-dashboard/        web UI: scan timeline, findings, honeytoken hits, report
+api/              backend API: start scans, poll progress, run the pipeline (orchestrator.py, analyze.py)
+dashboard/        one-page web UI: stage progress + report
 pipeline/         one folder per stage (1-fetch … 6-analyze)
-sandbox-images/   container images used inside the sandbox (worker, sinkhole)
+sandbox-images/   worker (fetch, static scan, detonate) + sinkhole (fake internet)
 report/           report format (JSON schema)
 infra/            Vultr VM provisioning, docker-compose, deploy scripts
 samples/          test packages: benign + harmless fake malware
