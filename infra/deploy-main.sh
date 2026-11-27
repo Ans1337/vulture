@@ -24,5 +24,9 @@ docker compose up -d --no-build docker-proxy api
 
 curl -fsS --retry 15 --retry-all-errors --retry-delay 1 --max-time 5 \
     http://127.0.0.1:8001/ | cmp dashboard/index.html -
-curl -fsS --max-time 5 -o /dev/null http://127.0.0.1:8001/api/scans
+# Part 1: the API must be locked (401 without the token) and open with it.
+TOKEN=$(grep '^APP_TOKEN=' .env | cut -d= -f2)
+[[ -n $TOKEN ]] || { echo "APP_TOKEN is missing from /root/vulture/.env" >&2; exit 1; }
+[[ $(curl -s --max-time 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8001/api/scans) == 401 ]]
+curl -fsS --max-time 5 -o /dev/null -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8001/api/scans
 echo "Deployed $SSH_ORIGINAL_COMMAND to parivant.se"
