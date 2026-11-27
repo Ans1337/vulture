@@ -87,6 +87,12 @@ def fetch_upload():
                     z.extract(n, PKG)
     else:
         shutil.copy(f, PKG / f.name)
+    # macOS tar/zip add AppleDouble files (._*) and __MACOSX/; drop them so the package root is found
+    for junk in [*PKG.rglob("._*"), *PKG.rglob("__MACOSX")]:
+        if junk.is_dir():
+            shutil.rmtree(junk, ignore_errors=True)
+        elif junk.exists():
+            junk.unlink()
     # npm tarballs nest everything under package/
     kids = list(PKG.iterdir())
     if len(kids) == 1 and kids[0].is_dir():
