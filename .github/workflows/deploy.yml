@@ -2,7 +2,7 @@ name: Deploy parivant.se
 
 on:
   pull_request:
-    branches: [main]
+    branches: ['**']
   push:
     branches: [main]
 
@@ -15,7 +15,7 @@ defaults:
 
 concurrency:
   group: parivant-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
@@ -31,6 +31,7 @@ jobs:
         run: |
           curl --fail --silent --show-error --retry 15 --retry-all-errors --retry-delay 1 \
             http://127.0.0.1:8000/ | cmp dashboard/index.html -
+          # no APP_TOKEN in the CI .env, so the API is open
           curl -fsS -H "X-Vulture-Nonce: $(curl -fsS -X POST http://127.0.0.1:8000/api/nonce | jq -r .nonce)" \
             http://127.0.0.1:8000/api/scans | jq -e '. == []'
           # scan data needs a personal nonce

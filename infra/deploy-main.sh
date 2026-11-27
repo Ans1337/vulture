@@ -24,7 +24,15 @@ docker compose up -d --no-build docker-proxy api
 
 curl -fsS --retry 15 --retry-all-errors --retry-delay 1 --max-time 5 \
     http://127.0.0.1:8001/ | cmp dashboard/index.html -
-# scan data needs a personal nonce: without one the API must refuse
-[[ $(curl -s --max-time 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8001/api/scans) == 401 ]]
-curl -fsS --max-time 5 -o /dev/null -X POST http://127.0.0.1:8001/api/nonce
+# With APP_TOKEN in .env the API must answer 401 without it and 200 with it; without one it is open and must answer 200.
+TOKEN=$(grep '^APP_TOKEN=' .env | cut -d= -f2)
+if [[ -n $TOKEN ]]; then
+    [[ $(curl -s --max-time 5 -o /dev/null -w '%{http_code}' http://127.0.0.1:8001/api/limits) == 401 ]]
+    curl -fsS --max-time 5 -o /dev/null -H "Authorization: Bearer $TOKEN" http://127.0.0.1:8001/api/limits
+else
+    echo "NOTE: no APP_TOKEN in .env, the API is open to anyone who can reach it." >&2
+    curl -fsS --max-time 5 -o /dev/null http://127.0.0.1:8001/api/limits
+fi
+# Scan data needs a personal nonce on top of the token: without one the API must refuse.
+[[ $(curl -s --max-time 5 -o /dev/null -w '%{http_code}' ${TOKEN:+-H "Authorization: Bearer $TOKEN"} http://127.0.0.1:8001/api/scans) == 401 ]]
 echo "Deployed $SSH_ORIGINAL_COMMAND to parivant.se"
