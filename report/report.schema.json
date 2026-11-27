@@ -7,7 +7,8 @@
     "target": { "type": "object", "properties": {
       "input": { "type": "string" }, "name": { "type": "string" }, "version": { "type": "string" },
       "commit": { "type": "string" }, "sha256": { "type": "string" } } },
-    "verdict": { "enum": ["safe", "suspicious", "malware"] },
+    "verdict": { "enum": ["safe", "suspicious", "malware", "incomplete"],
+                 "description": "incomplete = the package's own code never ran in the sandbox (no install scripts, no entry point, or detonation failed), so absence of evidence proves nothing" },
     "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
     "summary": { "type": "string" },
     "indicators": { "type": "array", "items": { "type": "object" } },

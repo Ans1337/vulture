@@ -11,6 +11,41 @@ import os
 import re
 
 BENIGN_HOSTS = ("registry.npmjs.org", "github.com", "nodejs.org", "objects.githubusercontent.com")
+HOOKS = ("preinstall", "install", "postinstall")
+LOADED = "[vulture] loading "
+MALWARE_AT, SUSPICIOUS_AT = 60, 25
+
+
+def coverage(raw: dict) -> dict:
+    """Did any package code actually run in the sandbox? (Audit #23/#24/#30)
+
+    deps-rebuild alone does not count: it runs the dependencies' scripts, not the package. A run
+    whose package steps all timed out with nothing observed does not count either.
+    """
+    det = raw.get("detonate") or {}
+    runs = det.get("runs") or []
+    if det.get("error") or not runs:
+        return {"executed": False, "runs": {},
+                "reason": f"detonation failed: {det.get('error') or 'no runs were recorded'}"}
+    per_run, any_ok = {}, False
+    for r in runs:
+        o = r.get("observed") or {}
+        seen = bool(o.get("honeytoken_access") or o.get("network"))
+        ran = []
+        for st in r.get("steps") or []:
+            out = st.get("output") or ""
+            # output keeps only the last 3000 chars; a full buffer may have cut the "loading" lines
+            if st.get("label") in HOOKS or (st.get("label") == "entry" and (LOADED in out or len(out) >= 3000)):
+                ran.append({"step": st.get("label"), "exit": st.get("exit"),
+                            "loaded": [ln[len(LOADED):] for ln in out.splitlines() if ln.startswith(LOADED)][:10]})
+        ok = bool(ran) and (seen or any(x["exit"] != "timeout" for x in ran))
+        any_ok = any_ok or ok
+        per_run[r.get("name", "?")] = {"executed": ok, "steps": ran}
+    reason = None
+    if not any_ok:
+        reason = ("nothing observed: every package step timed out" if any(v["steps"] for v in per_run.values())
+                  else "nothing executed: no install scripts and no entry point found")
+    return {"executed": any_ok, "runs": per_run, "reason": reason}
 
 
 def evidence(raw: dict) -> dict:
@@ -81,7 +116,7 @@ def score(ev: dict) -> dict:
         s += 5; reasons.append("runs code at install time")
     if ev["trigger_conditions"]:
         s += 10; reasons.append("code checks time / CI / environment before acting (possible evasion)")
-    verdict = "malware" if s >= 60 else "suspicious" if s >= 25 else "safe"
+    verdict = "malware" if s >= MALWARE_AT else "suspicious" if s >= SUSPICIOUS_AT else "safe"
     return {"verdict": verdict, "risk_score": min(s, 100), "reasons": reasons}
 
 
@@ -125,6 +160,13 @@ def llm_report(ev: dict, rules: dict) -> dict | None:
 def report(raw: dict) -> dict:
     ev = evidence(raw)
     rules = score(ev)
+    rules["coverage"] = cov = coverage(raw)
+    if not cov["executed"]:
+        rules["reasons"].insert(0, cov["reason"])
+        # Only "safe" is replaced: it would claim we watched the package run and saw nothing.
+        # Evidence that already reached suspicious/malware (static or behavioural) stays as is.
+        if rules["verdict"] == "safe":
+            rules["verdict"] = "incomplete"
     ai = llm_report(ev, rules)
     final = rules["verdict"]
     if ai and ai.get("verdict") in ("safe", "suspicious", "malware"):
