@@ -45,6 +45,11 @@ class LimitsTest(unittest.TestCase):
             with mock.patch.dict(os.environ, {k: v}), self.assertRaises(SystemExit):
                 limits.load()
 
+    def test_followup_setting_can_only_lower_the_hard_cap(self):
+        for setting, expected in [("12", 3), ("2", 2), ("0", 0)]:
+            with mock.patch.dict(os.environ, {"INVESTIGATOR_MAX_RERUNS": setting}):
+                self.assertEqual(limits.load().investigator_max_reruns, expected)
+
 
 class LifecycleTest(unittest.TestCase):
     def test_teardown_removes_everything_and_verifies(self):

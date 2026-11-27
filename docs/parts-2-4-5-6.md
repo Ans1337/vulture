@@ -31,7 +31,11 @@ Setup: set `VULTR_API_KEY` and `VULTR_SSH_KEY_ID`, and mount the key's private h
 **Not verified against the real Vultr API.** The client is tested against an in-memory fake. The plan, the OS id and the API field names need one real run. Costs are real, so keep `VULTR_VM_MAX_AGE` low.
 
 ## Part 6: AI investigator (`api/investigator.py`)
-After the first detonation, while the sandbox is still alive, the model decides what to do next. It has four tools: `list_files`, `read_file`, `grep` (read-only, no network, in a throwaway container) and `rerun(persona, clock)` (one more detonation with the same isolation). The loop is bounded: `INVESTIGATOR_MAX_STEPS` (8), `INVESTIGATOR_MAX_RERUNS` (3), the scan deadline, and retries on model errors or bad JSON. Every step is an `investigate` event and shows live in the UI. The transcript is saved with the evidence and sent to the final verdict call.
+After the initial persona × clock matrix, the investigator receives the run settings, exit statuses, output excerpts and observed behaviour. It can conclude immediately, inspect files with `list_files`, `read_file` or `grep`, or ask for a sandboxed `rerun(persona, clock)`. Each tool result goes back to the model before its next decision.
+
+The backend permits at most three follow-up runs per scan. Failed attempts count. `INVESTIGATOR_MAX_RERUNS` can lower the cap, including to zero. After the last allowed run or `INVESTIGATOR_MAX_STEPS` tool rounds (default 8), the model gets one conclusion-only turn if time remains. `INVESTIGATOR_TIMEOUT` defaults to 180 seconds for the whole investigation, including inference, retries and sandbox work. The earlier of this deadline and the remaining scan deadline wins.
+
+Investigation events appear in the live view. Raw follow-up traces and sinkhole observations are stored alongside the initial evidence, so both the verdict and later re-analysis use them. The report lists unresolved questions from the model and requested tests that could not finish. If the model never concludes, the backend identifies remaining gaps from execution coverage and static findings.
 
 - Package text is untrusted. The prompt says so, and the verdict rules from the audit still hold: rules are the floor and the AI can raise a verdict to SUSPICIOUS at most.
 - The scan marker is masked as `<HONEYTOKEN>` in everything sent to the model, tool output included.

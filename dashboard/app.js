@@ -270,6 +270,7 @@ function reportHtml(s, rep) {
       ${conf != null ? `<div class="row" style="margin-top:4px"><div class="meter"><i style="width:${conf}%;background:var(--accent)"></i></div><span class="muted">${conf}% confidence</span></div>` : ''}
       ${rep.isolation ? `<div class="muted" style="font-size:12px">sandbox: ${esc(rep.isolation.technology)} · ${esc(rep.isolation.network)}</div>` : ''}</div></div>
     <h3 style="margin-top:14px">What it tried to do</h3><p>${esc(plainEnglish(rep))}</p>
+    ${rep.rules.unresolved?.length ? `<h3>Unresolved questions</h3><ul>${rep.rules.unresolved.map(q => `<li>${esc(q)}</li>`).join('')}</ul>` : ''}
     ${ai?.recommendation ? `<p><b>Recommendation:</b> ${esc(ai.recommendation)}</p>` : ''}
     ${rep.ai?.error ? `<p class="err">AI review unavailable (${esc(rep.ai.error)}). The verdict above is rule-based only.</p>` : ''}
     ${cov && !cov.executed ? `<p class="incomplete" style="padding:8px 12px;border-radius:8px"><b>Not enough coverage to call this safe:</b> ${esc(cov.reason)}. The package's own code never ran, so seeing no bad behaviour proves nothing.</p>` : ''}

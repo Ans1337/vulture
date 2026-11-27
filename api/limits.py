@@ -56,6 +56,8 @@ class Limits:
     detonate_timeout: int    # whole persona x clock matrix
     step_timeout: int        # one command inside the matrix (passed to the worker)
     scan_timeout: int        # hard cap for the entire scan, all stages
+    investigator_timeout: int  # shared by all investigator model calls and sandbox tools
+    investigator_max_reruns: int
     # --- fleet ---
     max_concurrent: int      # scans running at once
     max_queued: int          # scans waiting for a slot before the API says 429
@@ -84,6 +86,8 @@ def load() -> Limits:
         detonate_timeout=_int("LIMIT_DETONATE_TIMEOUT", 900),
         step_timeout=_int("SCAN_STEP_TIMEOUT", 60),
         scan_timeout=_int("LIMIT_SCAN_TIMEOUT", 1500),
+        investigator_timeout=_int("INVESTIGATOR_TIMEOUT", 180),
+        investigator_max_reruns=min(3, _int("INVESTIGATOR_MAX_RERUNS", 3, lo=0)),
         max_concurrent=_int("LIMIT_MAX_CONCURRENT", 2),
         max_queued=_int("LIMIT_MAX_QUEUED", 8, lo=0),
         history_max=_int("LIMIT_HISTORY_MAX", 200),
