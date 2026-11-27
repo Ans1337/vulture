@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -46,6 +46,19 @@ def valid_source(src: str) -> bool:
         return True
     m = GITHUB_RE.fullmatch(src)
     return bool(m) and m.group(2) not in (".", "..") and ".." not in (m.group(3) or "")
+
+
+def current_owner(x_vulture_nonce: str = Header("")) -> str:
+    """The caller's identity: the hash of their personal nonce. Without a well-formed nonce there is no identity."""
+    if not security.valid_nonce(x_vulture_nonce):
+        raise HTTPException(401, "missing or invalid personal nonce (send X-Vulture-Nonce; get one from POST /api/nonce)")
+    return security.nonce_hash(x_vulture_nonce)
+
+
+def own_scan(sid: str, owner: str):
+    """404 for scans that are missing AND for scans that belong to someone else, so ids can't be probed."""
+    if not store.owns(sid, owner):
+        raise HTTPException(404, "no such scan")
 
 
 def _live() -> set[str]:
@@ -133,7 +146,8 @@ def _run(scan_id: str, source: str, upload: Optional[tuple[str, bytes]], cancel:
 
 
 @app.post("/api/scans", status_code=201)
-async def create_scan(source: str = Form(""), force: bool = Form(False), file: Optional[UploadFile] = File(None)):
+async def create_scan(source: str = Form(""), force: bool = Form(False), file: Optional[UploadFile] = File(None),
+                      owner: str = Depends(current_owner)):
     upload = None
     if file is not None and file.filename:
         data = await file.read(security.MAX_UPLOAD + 1)
@@ -152,15 +166,22 @@ async def create_scan(source: str = Form(""), force: bool = Form(False), file: O
                                  "name@latest), a GitHub URL (https://github.com/owner/repo[#ref]), or upload a file")
     # Dedupe: an exact version/commit that was already scanned has the same answer. force=true re-scans.
     key = None if upload else store.source_key(source)
-    if key and not force and (prev := store.find_done(key)):
+    if key and not force and (prev := store.find_done(key, owner)):
         return JSONResponse({"id": prev, "deduped": True}, status_code=200)
     if store.counts().get("queued", 0) >= L.max_queued:
         raise HTTPException(429, f"scan queue is full ({L.max_queued} waiting); try again shortly")
     sid = uuid.uuid4().hex[:10]
-    store.create(sid, source, SANDBOX_MODE)
+    store.create(sid, source, SANDBOX_MODE, owner)
     cancel = CANCELS[sid] = threading.Event()
     threading.Thread(target=_run, args=(sid, source, upload, cancel), daemon=True).start()
     return {"id": sid}
+
+
+@app.post("/api/nonce")
+def issue_nonce():
+    """Mint a personal nonce. Nothing is stored: the nonce only becomes an identity when a scan is created with it.
+    The client must keep it (the dashboard uses localStorage); it cannot be recovered or reset."""
+    return {"nonce": security.new_nonce()}
 
 
 @app.get("/api/limits")
@@ -170,13 +191,15 @@ def limits():
 
 
 @app.get("/api/scans")
-def list_scans(q: str = "", status: str = "", verdict: str = "", limit: int = Query(100, ge=1, le=500)):
-    return store.list_scans(q=q, status=status, verdict=verdict, limit=limit)
+def list_scans(q: str = "", status: str = "", verdict: str = "", limit: int = Query(100, ge=1, le=500),
+               owner: str = Depends(current_owner)):
+    return store.list_scans(q=q, status=status, verdict=verdict, limit=limit, owner=owner)
 
 
 @app.get("/api/scans/{sid}")
-def get_scan(sid: str, after: int = Query(0, ge=0)):
+def get_scan(sid: str, after: int = Query(0, ge=0), owner: str = Depends(current_owner)):
     """`after` = last event id the client has, so polling only transfers new events."""
+    own_scan(sid, owner)
     s = store.get(sid, after)
     if not s:
         raise HTTPException(404, "no such scan")
@@ -184,7 +207,8 @@ def get_scan(sid: str, after: int = Query(0, ge=0)):
 
 
 @app.get("/api/scans/{sid}/evidence")
-def get_evidence(sid: str):
+def get_evidence(sid: str, owner: str = Depends(current_owner)):
+    own_scan(sid, owner)
     raw = store.get_evidence(sid)
     if raw is None:
         raise HTTPException(404, "no evidence stored for this scan")
@@ -192,7 +216,8 @@ def get_evidence(sid: str):
 
 
 @app.post("/api/scans/{sid}/cancel")
-def cancel_scan(sid: str):
+def cancel_scan(sid: str, owner: str = Depends(current_owner)):
+    own_scan(sid, owner)
     ev = CANCELS.get(sid)
     if ev is None:
         if store.get(sid) is None:
@@ -203,8 +228,9 @@ def cancel_scan(sid: str):
 
 
 @app.post("/api/scans/{sid}/reanalyze")
-def reanalyze(sid: str):
+def reanalyze(sid: str, owner: str = Depends(current_owner)):
     """Re-run stage 6 on the stored raw evidence (new rules or model) without detonating again."""
+    own_scan(sid, owner)
     s = store.get(sid)
     raw = store.get_evidence(sid)
     if not s or raw is None:

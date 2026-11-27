@@ -17,13 +17,43 @@ function tokenPrompt() {
   });
   return askToken;
 }
-async function api(url, opts = {}, retried = false) {
-  if (MOCK) return VultureMock.api(url, opts);
+// Personal nonce: your private key to your own scans. Minted by the server once, kept only in this browser.
+// Lose it and your scans are unreachable; share it and whoever has it sees them. "Your key" in the nav shows/replaces it.
+async function personalNonce() {
+  let n = localStorage.getItem('vultureNonce');
+  if (!n) {
+    const r = await rawFetch('/api/nonce', { method: 'POST' });
+    if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+    localStorage.setItem('vultureNonce', n = (await r.json()).nonce);
+  }
+  return n;
+}
+function rawFetch(url, opts = {}, retried = false) {
   const tok = localStorage.getItem('vultureToken');
-  const r = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), ...(tok ? { Authorization: 'Bearer ' + tok } : {}) } });
-  if (r.status !== 401 || retried) return r;
-  localStorage.setItem('vultureToken', await tokenPrompt());
-  return api(url, opts, true);
+  return fetch(url, { ...opts, headers: { ...(opts.headers || {}), ...(tok ? { Authorization: 'Bearer ' + tok } : {}) } }).then(async r => {
+    if (r.status !== 401 || retried || (await r.clone().json().catch(() => ({}))).detail?.includes('nonce')) return r;
+    localStorage.setItem('vultureToken', await tokenPrompt());
+    return rawFetch(url, opts, true);
+  });
+}
+async function api(url, opts = {}) {
+  if (MOCK) return VultureMock.api(url, opts);
+  return rawFetch(url, { ...opts, headers: { ...(opts.headers || {}), 'X-Vulture-Nonce': await personalNonce() } });
+}
+function keyDialog() {
+  const o = document.createElement('div'); o.className = 'overlay';
+  o.innerHTML = `<form class="card" style="max-width:420px"><h3>Your key</h3>
+    <p class="muted">This personal key is what lets you see your own scans. Nobody else can list or open them without it. Save it somewhere safe (it can't be recovered), and paste it on another device to see the same scans there.</p>
+    <input id="nonce" autocomplete="off" spellcheck="false" style="width:100%;margin-bottom:10px" class="mono">
+    <button>Use this key</button> <button type="button" id="close">Close</button></form>`;
+  document.body.append(o);
+  personalNonce().then(n => { $('#nonce', o).value = n; }).catch(e => { $('#nonce', o).placeholder = e.message; });
+  $('#close', o).onclick = () => o.remove();
+  $('form', o).onsubmit = e => {
+    e.preventDefault(); const v = $('#nonce', o).value.trim();
+    if (!/^[A-Za-z0-9_-]{32,128}$/.test(v)) return void ($('#nonce', o).setCustomValidity('32-128 letters, digits, - or _'), $('#nonce', o).reportValidity());
+    localStorage.setItem('vultureNonce', v); o.remove(); route();
+  };
 }
 const json = async r => { const j = await r.json().catch(() => ({})); if (!r.ok) throw new Error(j.detail || r.statusText); return j; };
 
@@ -261,5 +291,6 @@ async function refreshApprovalBadge() {
   const n = (await pendingApprovals()).length, b = $('#appr-count');
   b.hidden = !n; b.textContent = n;
 }
+$('#key-btn').onclick = e => { e.preventDefault(); if (!MOCK) keyDialog(); };
 route();
 refreshApprovalBadge();
