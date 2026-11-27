@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from fastapi.testclient import TestClient
 import app as appmod, security, store
 
-H = {"Authorization": "Bearer " + "t" * 32}
+H = {"Authorization": "Bearer " + "t" * 32, "X-Vulture-Nonce": "n" * 40}
 
 
 class SecurityTest(unittest.TestCase):
@@ -26,7 +26,7 @@ class SecurityTest(unittest.TestCase):
         self.assertEqual(self.c.get("/api/scans").status_code, 401)
         self.assertEqual(self.c.get("/api/scans", headers={"Authorization": "Bearer nope"}).status_code, 401)
         self.assertEqual(self.c.get("/api/scans", headers=H).status_code, 200)
-        self.assertEqual(self.c.get("/api/scans", headers={"X-Vulture-Token": "t" * 32}).status_code, 200)
+        self.assertEqual(self.c.get("/api/scans", headers={"X-Vulture-Token": "t" * 32, "X-Vulture-Nonce": "n" * 40}).status_code, 200)
 
     def test_docs_and_openapi_hidden(self):
         for path in ("/docs", "/redoc", "/openapi.json"):
@@ -79,8 +79,8 @@ class SecurityTest(unittest.TestCase):
             with mock.patch.dict(os.environ, {"APP_TOKEN": ""}):
                 importlib.reload(security)
                 self.assertEqual(security.APP_TOKEN, "")
-                self.assertEqual(self.c.get("/api/scans").status_code, 200)    # open: no token needed
-                self.assertEqual(self.c.post("/api/scans", data={"source": "--bad"}).status_code, 400)  # still validated
+                self.assertEqual(self.c.get("/api/scans", headers={"X-Vulture-Nonce": "n" * 40}).status_code, 200)    # open: no token needed
+                self.assertEqual(self.c.post("/api/scans", data={"source": "--bad"}, headers={"X-Vulture-Nonce": "n" * 40}).status_code, 400)  # still validated
         finally:
             importlib.reload(security)
 

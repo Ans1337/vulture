@@ -8,17 +8,22 @@ All of it is plain ASGI middleware plus a few helpers, configured from the envir
   RATE_API_PER_MIN       all /api/* requests per IP per minute            (default 120)
   RATE_SCANS_PER_HOUR    new scans per IP per hour                        (default 6)
   RATE_AUTH_FAILS_PER_MIN  failed token attempts per IP per minute        (default 10)
+  Personal nonce         separate from APP_TOKEN: each user keeps their own secret nonce (X-Vulture-Nonce header,
+                         issued by POST /api/nonce). Scans are owned by it and invisible without it. Only its
+                         SHA-256 is stored.
   MAX_UPLOAD_MB          upload limit                                     (default 25)
   BODY_READ_TIMEOUT      seconds a client gets to send the request body   (default 30)
 """
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import json
 import logging
 import os
 import re
+import secrets
 import threading
 import time
 from collections import defaultdict, deque
@@ -101,6 +106,25 @@ def _token_ok(scope) -> bool:
         elif k == b"x-vulture-token":
             given = v.decode("latin-1").strip()
     return hmac.compare_digest(given.encode(), APP_TOKEN.encode())
+
+
+# ---- personal nonce ---------------------------------------------------------------------------
+
+NONCE_RE = re.compile(r"[A-Za-z0-9_-]{32,128}")
+
+
+def new_nonce() -> str:
+    return secrets.token_urlsafe(32)   # 256 bits
+
+
+def valid_nonce(nonce: str) -> bool:
+    return bool(NONCE_RE.fullmatch(nonce or ""))
+
+
+def nonce_hash(nonce: str) -> str:
+    """What gets stored. The nonce itself is high-entropy, so a plain SHA-256 is enough; a database leak
+    does not let anyone act as a user."""
+    return hashlib.sha256(nonce.encode()).hexdigest()
 
 
 async def _send_json(send, status: int, detail: str, headers: list | None = None):

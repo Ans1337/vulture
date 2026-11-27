@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from fastapi.testclient import TestClient
 import app as appmod, store, vultr, investigator, analyze, orchestrator, security
 
-H = {"Authorization": "Bearer " + "t" * 32}
+H = {"Authorization": "Bearer " + "t" * 32, "X-Vulture-Nonce": "n" * 40}
 
 
 def reset_db():

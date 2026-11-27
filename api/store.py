@@ -1,10 +1,14 @@
 """Part 2: persistent storage. SQLite (stdlib), WAL mode, one short-lived connection per call.
 
+Every scan belongs to the holder of a personal nonce (security.nonce_hash); only its SHA-256 is stored in
+scans.owner. Scans created before nonces existed have owner NULL and are visible to nobody.
+
 Tables: scans (one row per scan, incl. report + lifecycle), events (the timeline, in order),
 evidence (raw sandbox output, kept so a scan can be re-analysed without re-detonating).
 """
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import re
@@ -17,7 +21,8 @@ DB_PATH = os.environ.get("VULTURE_DB", "/data/vulture.db")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS scans(
   id TEXT PRIMARY KEY, source TEXT NOT NULL, source_key TEXT, status TEXT NOT NULL, stage TEXT,
-  created REAL NOT NULL, finished REAL, error TEXT, verdict TEXT, report TEXT, lifecycle TEXT, mode TEXT);
+  created REAL NOT NULL, finished REAL, error TEXT, verdict TEXT, report TEXT, lifecycle TEXT, mode TEXT,
+  owner TEXT);
 CREATE INDEX IF NOT EXISTS scans_created ON scans(created DESC);
 CREATE INDEX IF NOT EXISTS scans_key ON scans(source_key, status);
 CREATE TABLE IF NOT EXISTS events(
@@ -59,6 +64,9 @@ def init() -> int:
     with conn() as c:
         c.execute("PRAGMA journal_mode=WAL")
         c.executescript(SCHEMA)
+        if "owner" not in {r["name"] for r in c.execute("PRAGMA table_info(scans)")}:   # database from before nonces
+            c.execute("ALTER TABLE scans ADD COLUMN owner TEXT")
+        c.execute("CREATE INDEX IF NOT EXISTS scans_owner ON scans(owner, created DESC)")
         now = time.time()
         rows = c.execute("SELECT id FROM scans WHERE status IN ('queued','running')").fetchall()
         for r in rows:
@@ -69,18 +77,26 @@ def init() -> int:
         return len(rows)
 
 
-def create(scan_id: str, source: str, mode: str) -> dict:
+def create(scan_id: str, source: str, mode: str, owner: str | None = None) -> dict:
     now = time.time()
     with conn() as c:
-        c.execute("INSERT INTO scans(id,source,source_key,status,created,mode) VALUES(?,?,?,?,?,?)",
-                  (scan_id, source, source_key(source), "queued", now, mode))
+        c.execute("INSERT INTO scans(id,source,source_key,status,created,mode,owner) VALUES(?,?,?,?,?,?,?)",
+                  (scan_id, source, source_key(source), "queued", now, mode, owner))
     return {"id": scan_id, "created": now}
 
 
-def find_done(key: str) -> str | None:
+def owns(scan_id: str, owner: str) -> bool:
+    """True only if `owner` (a nonce hash) created this scan. Unknown scans and other people's scans look the same."""
     with conn() as c:
-        r = c.execute("SELECT id FROM scans WHERE source_key=? AND status='done' ORDER BY created DESC LIMIT 1",
-                      (key,)).fetchone()
+        r = c.execute("SELECT owner FROM scans WHERE id=?", (scan_id,)).fetchone()
+    return bool(r and r["owner"] and hmac.compare_digest(r["owner"], owner))
+
+
+def find_done(key: str, owner: str) -> str | None:
+    """Dedupe is per owner: handing back someone else's scan id would hand over their report."""
+    with conn() as c:
+        r = c.execute("SELECT id FROM scans WHERE source_key=? AND owner=? AND status='done' "
+                      "ORDER BY created DESC LIMIT 1", (key, owner)).fetchone()
     return r["id"] if r else None
 
 
@@ -119,6 +135,7 @@ def _row(r) -> dict:
     for k in ("report", "lifecycle"):
         d[k] = json.loads(d[k]) if d.get(k) else None
     d.pop("source_key", None)
+    d.pop("owner", None)
     return d
 
 
@@ -141,8 +158,11 @@ def status_of(scan_id: str) -> str | None:
     return r["status"] if r else None
 
 
-def list_scans(q: str = "", status: str = "", verdict: str = "", limit: int = 100) -> list[dict]:
+def list_scans(q: str = "", status: str = "", verdict: str = "", limit: int = 100, owner: str | None = None) -> list[dict]:
+    """`owner` limits the list to one person's scans; the API always passes it. None = all (internal use only)."""
     where, vals = [], []
+    if owner is not None:
+        where.append("owner=?"); vals.append(owner)
     if q:
         where.append("source LIKE ? ESCAPE '\\'")
         vals.append("%" + q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%")
