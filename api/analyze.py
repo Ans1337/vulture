@@ -123,7 +123,7 @@ def score(ev: dict) -> dict:
 
 PROMPT = """You are Vulture, a malware analyst for open-source packages. You get evidence from a
 static scan and from detonating the package in a sandbox with planted honeytokens (fake credentials
-containing the marker), a fake internet (sinkhole), several personas and a clock pushed forward.
+containing a marker, shown to you as <HONEYTOKEN>), a fake internet (sinkhole), several personas and a clock pushed forward.
 
 Also reason about DORMANT code: suspicious code that never executed, and what condition would trigger it
 (dates, CI variables, OS, hostnames, arguments).
@@ -135,27 +135,62 @@ Reply with ONE JSON object only:
  "recommendation": "..."}"""
 
 
-def llm_report(ev: dict, rules: dict) -> dict | None:
+def _str(x) -> bool:
+    return isinstance(x, str) and bool(x.strip())
+
+
+def validate_ai(obj) -> dict:
+    """Manual schema check of the model reply (Audit #28). Raises ValueError if unusable;
+    malformed list items are dropped, optional fields are normalised."""
+    if not isinstance(obj, dict):
+        raise ValueError("reply is not a JSON object")
+    if obj.get("verdict") not in ("safe", "suspicious", "malware"):
+        raise ValueError(f"bad verdict {str(obj.get('verdict'))[:40]!r}")
+    if not _str(obj.get("summary")):
+        raise ValueError("missing summary")
+    c = obj.get("confidence")
+    conf = float(c) if isinstance(c, (int, float)) and not isinstance(c, bool) and 0 <= c <= 1 else None
+    ind = [{k: i[k] for k in ("title", "severity", "evidence")} for i in obj.get("indicators") or []
+           if isinstance(i, dict) and _str(i.get("title")) and i.get("severity") in ("low", "medium", "high")
+           and isinstance(i.get("evidence"), str)] if isinstance(obj.get("indicators"), list) else []
+    dor = [{k: d[k] for k in ("file", "condition", "would_do")} for d in obj.get("dormant_triggers") or []
+           if isinstance(d, dict) and all(isinstance(d.get(k), str) for k in ("file", "condition", "would_do"))] \
+        if isinstance(obj.get("dormant_triggers"), list) else []
+    rec = obj.get("recommendation") if isinstance(obj.get("recommendation"), str) else ""
+    return {"verdict": obj["verdict"], "confidence": conf, "summary": obj["summary"], "indicators": ind,
+            "dormant_triggers": dor, "recommendation": rec}
+
+
+def llm_report(ev: dict, rules: dict, marker: str = "") -> dict | None:
     key, model = os.environ.get("VULTR_INFERENCE_API_KEY"), os.environ.get("AGENT_MODEL")
     if not key or not model:
         return None
     from openai import OpenAI
+    # 2 attempts x 60 s, no hidden SDK retries: a dead model costs ~2 min, not 6+ (Audit #28)
     client = OpenAI(base_url=os.environ.get("VULTR_INFERENCE_BASE_URL", "https://api.vultrinference.com/v1"),
-                    api_key=key, timeout=120)
-    content = json.dumps({"rule_based": rules, "evidence": ev})[:60000]
-    last = None
-    for _ in range(3):
+                    api_key=key, timeout=60, max_retries=0)
+    content = json.dumps({"rule_based": rules, "evidence": ev})
+    if marker:
+        content = content.replace(marker, "<HONEYTOKEN>")   # Audit #27: never send the scan marker out
+    content = content[:60000]
+    last = "no reply"
+    for _ in range(2):
         try:
             r = client.chat.completions.create(model=model, temperature=0.1, max_tokens=1500,
                                                messages=[{"role": "system", "content": PROMPT},
                                                          {"role": "user", "content": content}])
             text = re.sub(r"<think>.*?</think>", "", r.choices[0].message.content or "", flags=re.S)
             m = re.search(r"\{.*\}", text, re.S)
-            if m:
-                return json.loads(m.group(0))
+            if not m:
+                last = "model reply failed validation: no JSON object in reply"
+                continue
+            try:
+                return validate_ai(json.loads(m.group(0)))
+            except ValueError as e:   # json.JSONDecodeError is a ValueError too
+                last = f"model reply failed validation: {e}"
         except Exception as e:
-            last = e
-    return {"error": f"model failed: {last}"} if last else None
+            last = f"model failed: {e}"
+    return {"error": str(last)[:500]}
 
 
 def report(raw: dict) -> dict:
@@ -168,7 +203,7 @@ def report(raw: dict) -> dict:
         # Evidence that already reached suspicious/malware (static or behavioural) stays as is.
         if rules["verdict"] == "safe":
             rules["verdict"] = "incomplete"
-    ai = llm_report(ev, rules)
+    ai = llm_report(ev, rules, raw.get("marker", ""))
     # Rules are the floor (Audit #25): the model may raise the verdict, never lower it.
     # "incomplete" ranks with "safe", so the model can raise it but can never turn it into "safe".
     final, source = rules["verdict"], "rules"
