@@ -77,6 +77,9 @@ gVisor or microVM layer yet.
   not request bodies; a body-filtering authorization proxy is future work.
 - **No authentication on the API.** Bound to `127.0.0.1` by default; on a VM use a reverse proxy with
   auth or set `VULTURE_BIND` knowingly.
+- **No retry when the sandbox dies.** If the detonate container crashes or is killed mid-scan, the
+  scan is not re-run in a fresh sandbox: the report is built from whatever was captured so far, with
+  "detonation failed: …" in the reasons (`incomplete` if nothing ran). A bounded retry is future work.
 - **Scans live in memory**: lost on restart; no persistence.
 - **No deduplication**: concurrent scans of the same package run separately; no concurrency limit.
 - **Shared kernel**: Docker/runc only; a kernel exploit from the detonate container would reach the
