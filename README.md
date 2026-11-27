@@ -5,6 +5,10 @@ package, detonates it in an isolated Docker sandbox full of fake secrets and a f
 what it does, and writes a **safe / suspicious / malware** report (with an AI analyst on Vultr
 Serverless Inference when a key is configured).
 
+[![Vulture flags fake-stealer as malware in the demo](docs/vulture-demo-preview.jpg)](docs/vulture-demo.mp4?raw=true)
+
+[Download the demo (4 min, MP4)](docs/vulture-demo.mp4?raw=true) to follow the scan from package submission to the evidence behind the malware verdict.
+
 > Status: **MVP**. npm packages, GitHub repos and uploads, scanned either in Docker sandboxes on the
 > machine that runs Vulture (`SANDBOX_MODE=docker`, the default) or on a throwaway Vultr VM per scan
 > (`SANDBOX_MODE=vultr`), with an optional AI investigator that reads files and re-runs the package.
