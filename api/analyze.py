@@ -2,7 +2,7 @@
 
 Rule-based scoring always runs. When VULTR_INFERENCE_API_KEY and AGENT_MODEL are set, the
 agent on Vultr Serverless Inference reviews the same evidence (including code that never
-executed) and writes the final verdict.
+executed); it may raise the rule-based verdict but never lower it.
 """
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ BENIGN_HOSTS = ("registry.npmjs.org", "github.com", "nodejs.org", "objects.githu
 HOOKS = ("preinstall", "install", "postinstall")
 LOADED = "[vulture] loading "
 MALWARE_AT, SUSPICIOUS_AT = 60, 25
+SEVERITY = {"safe": 0, "incomplete": 0, "suspicious": 1, "malware": 2}
 
 
 def coverage(raw: dict) -> dict:
@@ -168,7 +169,9 @@ def report(raw: dict) -> dict:
         if rules["verdict"] == "safe":
             rules["verdict"] = "incomplete"
     ai = llm_report(ev, rules)
-    final = rules["verdict"]
-    if ai and ai.get("verdict") in ("safe", "suspicious", "malware"):
-        final = ai["verdict"]
-    return {"verdict": final, "rules": rules, "ai": ai, "evidence": ev}
+    # Rules are the floor (Audit #25): the model may raise the verdict, never lower it.
+    # "incomplete" ranks with "safe", so the model can raise it but can never turn it into "safe".
+    final, source = rules["verdict"], "rules"
+    if ai and SEVERITY.get(ai.get("verdict"), -1) > SEVERITY[final]:
+        final, source = ai["verdict"], "ai"
+    return {"verdict": final, "verdict_source": source, "rules": rules, "ai": ai, "evidence": ev}
