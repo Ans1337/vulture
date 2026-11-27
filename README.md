@@ -51,7 +51,7 @@ Verdicts (`report/report.schema.json`):
 - **safe**: no threats found within the scope of this check. Not a guarantee that the package is benign.
 - **suspicious**: risky behaviour or code, but no clear malicious action.
 - **malware**: clear malicious behaviour (e.g. planted secrets read and sent out).
-- **incomplete**: nothing was executed or detonation failed, so there is no basis for a verdict.
+- **incomplete**: an install script hung with nothing else observed. When no package code ran at all, the scan is reported as safe with a coverage warning.
 
 Details, isolation and limitations: [docs/architecture.md](docs/architecture.md).
 

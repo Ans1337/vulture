@@ -77,10 +77,10 @@ class StorageTest(unittest.TestCase):
             r = self.c.post("/api/scans", data={"source": "left-pad@1.3.0", "force": "true"}, headers=H)
             self.assertEqual(r.status_code, 201); self.assertNotEqual(r.json()["id"], sid)
         self.assertEqual(self.c.get(f"/api/scans/{sid}/evidence", headers=H).json()["marker"], "M")
-        self.assertEqual(self.c.post(f"/api/scans/{sid}/reanalyze", headers=H).json()["verdict"], "incomplete")
+        self.assertEqual(self.c.post(f"/api/scans/{sid}/reanalyze", headers=H).json()["verdict"], "safe")
         got = self.c.get(f"/api/scans/{sid}", headers=H).json()
-        self.assertEqual((got["status"], got["verdict"]), ("done", "incomplete"))
-        self.assertEqual(self.c.get("/api/scans?verdict=incomplete", headers=H).json()[0]["id"], sid)
+        self.assertEqual((got["status"], got["verdict"]), ("done", "safe"))
+        self.assertEqual(self.c.get("/api/scans?verdict=safe", headers=H).json()[0]["id"], sid)
 
     def test_cancel_running_scan(self):
         started = threading.Event()
