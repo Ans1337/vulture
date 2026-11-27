@@ -58,6 +58,13 @@ def coverage(raw: dict) -> dict:
     return {"executed": any_ok, "runs": per_run, "reason": reason}
 
 
+def hung_install_steps(raw: dict) -> int:
+    """Seconds after which an install hook (preinstall/install/postinstall) was killed, or 0 if none was."""
+    secs = [st.get("seconds") or 0 for r in (raw.get("detonate") or {}).get("runs") or []
+            for st in r.get("steps") or [] if st.get("label") in HOOKS and st.get("exit") == "timeout"]
+    return round(max(secs)) if secs else 0
+
+
 def evidence(raw: dict) -> dict:
     marker = raw["marker"]
     fetch, det, sink = raw.get("fetch", {}), raw.get("detonate", {}), raw.get("sinkhole", [])
@@ -249,6 +256,14 @@ def report(raw: dict) -> dict:
         # Evidence that already reached suspicious/malware (static or behavioural) stays as is.
         if rules["verdict"] == "safe":
             rules["verdict"] = "incomplete"
+    hung = hung_install_steps(raw)
+    if hung:
+        rules["reasons"].insert(0, f"install script did not finish within {hung} s")
+        observed = (ev["honeytoken_access"] or ev["exfiltration"] or ev["dns_lookups"] or ev["requests"]
+                    or ev["connections"] or ev["files_written_outside_project"])
+        if SEVERITY[rules["verdict"]] < SEVERITY["suspicious"]:
+            # A hung install script with nothing else seen means we never saw what it would do.
+            rules["verdict"] = "suspicious" if observed else "incomplete"
     ai = llm_report(ev, rules, raw.get("marker", ""))
     # Rules are the floor (Audit #25): the model may raise the verdict, never lower it.
     # "incomplete" ranks with "safe", so the model can raise it but can never turn it into "safe".
