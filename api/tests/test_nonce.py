@@ -27,8 +27,17 @@ class NonceTest(unittest.TestCase):
 
     def test_nonce_required_and_validated(self):
         for h in (TOK, TOK | {"X-Vulture-Nonce": "short"}, TOK | {"X-Vulture-Nonce": "!" * 40}):
-            self.assertEqual(self.c.get("/api/scans", headers=h).status_code, 401)
             self.assertEqual(self.scan(h).status_code, 401)
+        for h in (TOK | {"X-Vulture-Nonce": "short"}, TOK | {"X-Vulture-Nonce": "!" * 40}):
+            self.assertEqual(self.c.get("/api/scans", headers=h).status_code, 401)
+
+    def test_list_without_nonce_is_empty_not_an_error(self):
+        sid = self.scan(ALICE).json()["id"]
+        r = self.c.get("/api/scans", headers=TOK)   # what the deploy health check calls
+        self.assertEqual((r.status_code, r.json()), (200, []))
+        for method, path in [("get", f"/api/scans/{sid}"), ("get", f"/api/scans/{sid}/evidence"),
+                             ("post", f"/api/scans/{sid}/cancel"), ("post", f"/api/scans/{sid}/reanalyze")]:
+            self.assertEqual(getattr(self.c, method)(path, headers=TOK).status_code, 401, path)
 
     def test_issued_nonce_is_valid_and_unique(self):
         a = self.c.post("/api/nonce", headers=TOK).json()["nonce"]
