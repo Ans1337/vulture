@@ -1,52 +1,67 @@
 # Vulture
 
-**Is this package safe to install?** Vulture takes a GitHub repo, a package name or uploaded files,
-detonates it in an isolated sandbox on Vultr full of fake secrets and a fake internet, watches what it
-does, and has an AI agent write a **Safe / Malware report**.
+**Is this package safe to install?** Vulture takes an npm package name, a GitHub repo or an uploaded
+package, detonates it in an isolated Docker sandbox full of fake secrets and a fake internet, watches
+what it does, and writes a **safe / suspicious / malware** report (with an AI analyst on Vultr
+Serverless Inference when a key is configured).
 
-> Status: **MVP**. Scans npm packages, GitHub repos and uploads in Docker sandboxes on your machine.
-> Not yet: throwaway Vultr VM per scan, browser/screenshot step, approval gates, deploy to Vultr.
+> Status: **MVP**. npm packages, GitHub repos and uploads, scanned in Docker sandboxes on the machine
+> that runs Vulture. Not yet: deployed to Vultr, throwaway Vultr VM per scan, browser/screenshot step,
+> approval gates, PyPI. See [Known limitations](docs/architecture.md#known-limitations).
 
-## Run it (needs Docker Desktop)
+![Vulture dashboard](docs/screenshot.png)
+
+## Run it
+
+Needs Docker (Docker Desktop on macOS/Windows, Docker Engine + compose plugin on Linux).
 
 ```bash
-./start.sh            # builds the sandbox images, starts the app
+./start.sh                      # builds the sandbox images, starts the app
 open http://localhost:8000
 ```
 
-`start.sh` creates `.env` from `.env.example` on first run. Add `VULTR_INFERENCE_API_KEY` and
-`AGENT_MODEL` there to get the AI verdict; without them you get the rule-based verdict.
-After editing `.env`: `docker compose up -d api`.
+- `start.sh` creates `.env` from `.env.example` on first run. For the AI verdict set
+  `VULTR_INFERENCE_API_KEY` and `AGENT_MODEL` there (Vultr Serverless Inference, OpenAI-compatible API).
+  Without them you get the rule-based verdict only. After editing `.env`: `docker compose up -d api`.
+- The API has **no authentication**, so it listens on `127.0.0.1:8000` only. On a VM put a reverse
+  proxy with auth in front, or set `VULTURE_BIND=0.0.0.0` (shell or `.env`) if you accept an open
+  scanner on the network. See [infra/README.md](infra/README.md).
+- Stop it: `docker compose down`.
 
 To see it catch something, upload `samples/fake-malware/fake-stealer.tgz` (created by `start.sh`).
-It's **harmless fake malware**: it steals the planted fake secrets and sends them to a made-up host
+It is **harmless fake malware**: it steals the planted fake secrets and sends them to a made-up host
 that only exists inside the sandbox, and it has a time bomb that only fires 60+ days later outside CI.
 Vulture catches both.
-
-Stop it: `docker compose down`.
 
 ## Pipeline
 
 | # | Stage | What happens |
 |---|---|---|
-| 1 | **Fetch** | Clone the repo or pull the package. Pin the exact version and hash so the report is reproducible. |
-| 2 | **Static pass** | Unpack and scan: install scripts, obfuscation, encoded payloads, risky capabilities (env access, shell-outs, network calls). |
-| 3 | **Build the sandbox** | Spin up an isolated VM, load a persona (generic or twin), plant honeytokens (fake keys, `.env`, wallets), wire the fake internet (sinkholed network that answers back). |
-| 4 | **Detonate** | Install the package and run its entry points across the persona matrix, with the clock pushed forward so delayed payloads fire. |
-| 5 | **Observe** | Log everything it touches: network requests, files read/written, credentials reached for, processes spawned, honeytoken hits. |
-| 6 | **Analyze** | The agent reviews the traces plus the code paths that never executed, and reasons about what would trigger them. |
+| 1 | **Fetch** | `npm pack`, `git clone` or the upload; pin version + sha256; `npm install --ignore-scripts`. Nothing is executed. |
+| 2 | **Static pass** | Install scripts, obfuscation, encoded payloads, risky capabilities (env access, shell-outs, network calls, time/CI checks). |
+| 3 | **Sandbox** | Private internal Docker network with no route out, plus a sinkhole that answers every DNS/HTTP/TLS/TCP request and logs it. |
+| 4 | **Detonate** | Plant honeytokens with a per-scan marker, run install scripts and load entry points across the persona x clock matrix (developer / CI, now / +90 days). |
+| 5 | **Observe** | strace (processes, files, connections) + sinkhole logs: honeytoken reads, exfiltration of the marker, contacted hosts. |
+| 6 | **Analyze** | Rule-based score, then (if configured) the LLM reviews the evidence, including suspicious code that never ran, and gives the verdict. |
 
-**Output:** a Safe / Malware report (`report/report.schema.json`).
+Verdicts (`report/report.schema.json`):
+
+- **safe**: no threats found within the scope of this check. Not a guarantee that the package is benign.
+- **suspicious**: risky behaviour or code, but no clear malicious action.
+- **malware**: clear malicious behaviour (e.g. planted secrets read and sent out).
+- **incomplete**: nothing was executed or detonation failed, so there is no basis for a verdict.
+
+Details, isolation and limitations: [docs/architecture.md](docs/architecture.md).
 
 ## Repo layout
 
 ```
-api/              backend API: start scans, poll progress, run the pipeline (orchestrator.py, analyze.py)
+api/              FastAPI backend: start scans, poll progress, orchestrate containers (orchestrator.py, analyze.py)
 dashboard/        one-page web UI: stage progress + report
-pipeline/         one folder per stage (1-fetch … 6-analyze)
+pipeline/         one README per stage (1-fetch … 6-analyze)
 sandbox-images/   worker (fetch, static scan, detonate) + sinkhole (fake internet)
 report/           report format (JSON schema)
-infra/            Vultr VM provisioning, docker-compose, deploy scripts
+infra/            VM deploy notes
 samples/          test packages: benign + harmless fake malware
 docs/             idea, architecture, requirements mapping
 ```
