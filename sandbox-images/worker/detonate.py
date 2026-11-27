@@ -4,7 +4,7 @@ under strace, with honeytokens planted, and report everything it touched.
 Env: MARKER (unique honeytoken marker), PERSONAS (comma list), CLOCKS (comma list,
 e.g. "0,+30d,+90d"), STEP_TIMEOUT (seconds per command).
 """
-import json, os, re, shutil, subprocess, time
+import json, os, re, shutil, signal, subprocess, time
 from pathlib import Path
 from common import progress, result
 
@@ -41,7 +41,6 @@ def honeytokens(home: Path, project: Path, persona: str):
                                    f"aws_secret_access_key = {MARKER}aws/secret/key0000000000000\n",
         home / ".npmrc": f"//registry.npmjs.org/:_authToken=npm_{MARKER}000000000000000000000\n",
         home / ".ssh/id_rsa": f"-----BEGIN OPENSSH PRIVATE KEY-----\n{MARKER}b3BlbnNzaC1rZXktdjEAAAAA\n-----END OPENSSH PRIVATE KEY-----\n",
-        home / ".gitconfig": "[user]\n\tname = Alice Dev\n\temail = alice@example.com\n",
         home / ".git-credentials": f"https://alice:ghp_{MARKER}0000000000000000@github.com\n",
         home / ".config/solana/id.json": json.dumps([ord(c) % 256 for c in (MARKER * 8)[:64]]),
         home / ".ethereum/keystore/UTC--wallet.json": json.dumps({"address": "0x" + "ab" * 20, "crypto": {"ciphertext": MARKER}}),
@@ -50,7 +49,9 @@ def honeytokens(home: Path, project: Path, persona: str):
         home / ".bash_history": "ssh deploy@prod-api-01\naws s3 ls\n",
         project / ".env": f"STRIPE_SECRET_KEY=sk_live_{MARKER}000000\nOPENAI_API_KEY=sk-{MARKER}0000\n",
     }
-    for p, content in t.items():
+    # Planted for realism only: holds no secret and git/npm read it routinely, so it is not a token.
+    decoys = {home / ".gitconfig": "[user]\n\tname = Alice Dev\n\temail = alice@example.com\n"}
+    for p, content in {**t, **decoys}.items():
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_text(content)
     (home / ".ssh").chmod(0o700)
@@ -82,23 +83,85 @@ if (!targets.size) targets.add('index.js');
 """
 
 TRACE_RX = re.compile(r'^(?P<pid>\d+)\s+(?P<call>\w+)\((?P<args>.*)\)\s+=\s+(?P<ret>-?\d+|\?)(?P<rest>.*)$')
+UNFINISHED_RX = re.compile(r'^(?P<pid>\d+)\s+(?P<head>.*?)\s*<unfinished \.\.\.>$')
+RESUMED_RX = re.compile(r'^(?P<pid>\d+)\s+<\.\.\. (?P<call>\w+) resumed>(?P<tail>.*)$')
+FORK_CALLS = ("clone", "clone3", "fork", "vfork")
+# npm's own CLI: the real one from the image, not a node_modules/.bin/npm shim a package could ship.
+NODE_BIN = "/usr/local/bin/node"
+NPM_SCRIPTS = ("/usr/local/bin/npm", "/usr/local/bin/npx", "/usr/local/lib/node_modules/npm/bin/npm-cli.js",
+               "/usr/local/lib/node_modules/npm/bin/npx-cli.js")
+
+
+def _trace_lines(path: Path):
+    """strace -f lines, with interleaved '<unfinished ...>' / '<... X resumed>' pairs stitched back."""
+    pending = {}
+    for line in path.read_text(errors="replace").splitlines():
+        u = UNFINISHED_RX.match(line)
+        if u:
+            pending[u["pid"]] = u["head"]
+            continue
+        r = RESUMED_RX.match(line)
+        if r:
+            head = pending.pop(r["pid"], None)
+            if head is None:
+                continue
+            line = f'{r["pid"]} {head}{r["tail"]}'
+        yield line
+
+
+def _execve(args):
+    """execve args -> (filename, argv)."""
+    fn = re.match(r'"((?:[^"\\]|\\.)*)"', args)
+    rest = args.split(", [", 1)[1] if ", [" in args else ""
+    argv = re.findall(r'"((?:[^"\\]|\\.)*)"', rest.split("], ")[0])
+    return (fn.group(1) if fn else ""), argv
+
+
+def _is_npm(filename, argv):
+    return filename == NODE_BIN and len(argv) > 1 and argv[1] in NPM_SCRIPTS
 
 
 def parse_trace(path: Path, home: Path, project: Path, tokens: list[str]):
     procs, reads, writes, net, deleted, honey = [], set(), set(), [], set(), []
     token_set = set(tokens)
+    # Tokens npm's own CLI legitimately reads (its config). Only these are excused, and only inside
+    # npm's own process; anything npm spawns (sh -c postinstall, node setup.js, ...) still counts.
+    npm_own_reads = {str(home / ".npmrc")}
     if not path.exists():
         return {}
-    for line in path.read_text(errors="replace").splitlines():
+    lines = list(_trace_lines(path))
+    # Pass 1: child -> parent from fork/clone return values (a child's first syscalls can be logged
+    # before the parent's clone() returns, so the map must exist before attribution).
+    parent = {}
+    for line in lines:
+        m = TRACE_RX.match(line)
+        if m and m["call"] in FORK_CALLS and m["ret"].isdigit():
+            parent.setdefault(m["ret"], m["pid"])
+    # Pass 2: is_npm[pid] = that pid runs npm's CLI (set by its last execve, inherited on fork/clone).
+    is_npm = {}
+
+    def npm_owned(pid):
+        seen = set()
+        while pid not in is_npm and pid in parent and pid not in seen:
+            seen.add(pid)
+            pid = parent[pid]
+        return is_npm.get(pid, False)
+
+    for line in lines:
         m = TRACE_RX.match(line)
         if not m:
             continue
-        call, args, ret = m["call"], m["args"], m["ret"]
+        pid, call, args, ret = m["pid"], m["call"], m["args"], m["ret"]
         ok = ret != "?" and not ret.startswith("-")
-        if call == "execve":
-            argv = re.findall(r'"((?:[^"\\]|\\.)*)"', args.split("], ")[0])
-            if argv:
-                procs.append({"argv": argv[1:8] if len(argv) > 1 else argv, "ok": ok})
+        if call in FORK_CALLS:
+            if ok and ret.isdigit() and ret not in is_npm:
+                is_npm[ret] = npm_owned(pid)
+        elif call == "execve":
+            filename, argv = _execve(args)
+            if ok:
+                is_npm[pid] = _is_npm(filename, argv)
+            if argv or filename:
+                procs.append({"argv": argv[:7] or [filename], "ok": ok})
         elif call in ("openat", "open"):
             fm = re.search(r'"([^"]+)"', args)
             if not fm:
@@ -109,6 +172,8 @@ def parse_trace(path: Path, home: Path, project: Path, tokens: list[str]):
             is_write = any(x in args for x in ("O_WRONLY", "O_RDWR", "O_CREAT"))
             (writes if is_write else reads).add(f)
             if f in token_set or any(f.startswith(t) for t in token_set):
+                if not is_write and f in npm_own_reads and npm_owned(pid):
+                    continue
                 honey.append({"file": f, "op": "write" if is_write else "read", "ok": ok})
         elif call in ("connect", "sendto"):
             ip = re.search(r'inet_(?:addr|pton)\((?:AF_INET6?, )?"([^"]+)"\)', args)
@@ -148,16 +213,43 @@ def parse_trace(path: Path, home: Path, project: Path, tokens: list[str]):
     }
 
 
+def _kill_leftovers(pgid):
+    """Kill the step's process group, then anything else still alive in the container
+    (a child that called setsid() escapes the group). Only tini (pid 1) and we survive."""
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    me = os.getpid()
+    for d in os.listdir("/proc"):
+        if d.isdigit() and int(d) not in (1, me):
+            try:
+                os.kill(int(d), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+
 def run_cmd(label, cmd, cwd, env, trace_dir, timeout):
     trace = trace_dir / f"{label}.strace"
     full = ["strace", "-f", "-qq", "-s", "256", "-o", str(trace),
-            "-e", "trace=execve,openat,open,connect,sendto,unlink,unlinkat,rename,renameat,renameat2", *cmd]
+            "-e", "trace=execve,clone,clone3,fork,vfork,openat,open,connect,sendto,unlink,unlinkat,rename,renameat,renameat2", *cmd]
     t0 = time.time()
-    try:
-        p = subprocess.run(full, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
-        rc, out = p.returncode, (p.stdout + p.stderr)[-3000:]
-    except subprocess.TimeoutExpired as e:
-        rc, out = "timeout", ((e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or ""))[-3000:]
+    # Own session/process group so a timeout kills strace AND every traced descendant.
+    # Output goes to a file, not a pipe: a surviving grandchild holding the pipe can't hang us.
+    out_path = trace_dir / f"{label}.out"
+    with open(out_path, "wb") as fout:
+        p = subprocess.Popen(full, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=fout,
+                             stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            rc = p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            rc = "timeout"
+        _kill_leftovers(p.pid)
+        try:
+            p.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+    out = out_path.read_bytes()[-12000:].decode(errors="replace")[-3000:]
     return {"label": label, "cmd": " ".join(cmd)[:300], "exit": rc, "seconds": round(time.time() - t0, 1),
             "output": out}, trace
 
