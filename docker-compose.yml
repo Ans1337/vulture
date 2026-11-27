@@ -5,7 +5,7 @@ services:
     env_file: .env
     environment:
       DOCKER_HOST: tcp://docker-proxy:2375
-    ports: ["8000:8000"]
+    ports: ["${VULTURE_API_BIND:-8000}:8000"]
     depends_on: [docker-proxy]
 
   # The API only reaches Docker through this filtered proxy, never the raw socket.

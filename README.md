@@ -5,7 +5,8 @@ detonates it in an isolated sandbox on Vultr full of fake secrets and a fake int
 does, and has an AI agent write a **Safe / Malware report**.
 
 > Status: **MVP**. Scans npm packages, GitHub repos and uploads in Docker sandboxes on your machine.
-> Not yet: throwaway Vultr VM per scan, browser/screenshot step, approval gates, deploy to Vultr.
+> Pushes to `main` test and deploy the app to the existing Vultr VM once [production deployment](infra/README.md) is configured.
+> Not yet: throwaway Vultr VM per scan, browser/screenshot step, approval gates.
 
 ## Run it (needs Docker Desktop)
 
