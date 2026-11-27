@@ -2,7 +2,7 @@ name: Deploy parivant.se
 
 on:
   pull_request:
-    branches: [main]
+    branches: ['**']
   push:
     branches: [main]
 
@@ -15,7 +15,7 @@ defaults:
 
 concurrency:
   group: parivant-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   test:
