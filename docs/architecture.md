@@ -45,6 +45,17 @@ browser ──HTTP──> api (FastAPI, 127.0.0.1:8000) ──> docker-proxy (fi
 Verdicts: **safe** (no threats found within the scope of this check), **suspicious**, **malware**,
 **incomplete** (nothing executed or detonation failed; no basis for a verdict).
 
+**Verdict rule.** The rules decide, the model can only add caution. **Malware** is set by the rules
+alone and only from observed behaviour: the scan's honeytoken marker reached the fake internet, or one
+process tree (one step of one run) read a planted secret and opened an outbound connection. Any other
+risk (static findings, unexpected hosts, shell-outs) gives at most **suspicious**, whatever the score.
+**Incomplete** replaces safe when no package code ran, detonation failed, or an install script hung with
+nothing else observed; a hung install script with other activity is at least suspicious. The AI review
+can raise the verdict, never lower it, and never above **suspicious**: if it says malware and the rules
+do not, the report shows suspicious, keeps `ai.verdict = "malware"` and marks it
+"AI assessment, not confirmed by observed behaviour". If the model fails or its reply does not match the
+schema, the verdict is rule-based and the report says so.
+
 ## What is isolated and how
 
 Isolation technology is **Docker / runc** (Linux namespaces + cgroups, shared host kernel). There is no
@@ -54,7 +65,7 @@ gVisor or microVM layer yet.
 |---|---|---|
 | fetch container | normal Docker network (needs the registry / GitHub) | `cap_drop ALL`, no-new-privileges, mem 1g, pids 512. Only downloads: `npm install --ignore-scripts`, nothing from the package is executed. |
 | detonate container | per-scan `internal` Docker network, no route out; DNS points to the sinkhole | `cap_drop ALL`, no-new-privileges, read-only rootfs, tmpfs `/tmp`, mem 1g, 2 CPUs, pids 512, non-root uid 1000, scan volume mounted **read-only**, no Docker socket. |
-| sinkhole | same internal network only | Being hardened in parallel (non-root, `cap_drop ALL`, read-only, resource limits). |
+| sinkhole | same internal network only | non-root uid 1000, `cap_drop ALL`, no-new-privileges, read-only rootfs, mem 256m, 0.5 CPU, pids 128; low ports via the namespaced sysctl `ip_unprivileged_port_start=0`. |
 | api | default compose network; port on `127.0.0.1` by default | non-root, read-only rootfs, `cap_drop ALL`, no-new-privileges. Talks to Docker only via docker-proxy. |
 
 - **Honeytokens**: a fresh random marker per scan, so a hit is unambiguous and cannot come from an
