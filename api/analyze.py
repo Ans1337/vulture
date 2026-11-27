@@ -244,7 +244,7 @@ def llm_report(ev: dict, rules: dict, marker: str = "") -> dict | None:
                                                messages=[{"role": "system", "content": PROMPT},
                                                          {"role": "user", "content": content}])
         except Exception as e:
-            return {"error": f"model failed: {e}"[:500]} | diag
+            return {"error": f"model failed: {_safe_error(e)}"} | diag
         raw_text = r.choices[0].message.content or ""
         diag = _diag(r, raw_text, marker)
         text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.S)
@@ -257,6 +257,13 @@ def llm_report(ev: dict, rules: dict, marker: str = "") -> dict | None:
         except ValueError as e:   # json.JSONDecodeError is a ValueError too
             last = f"model reply failed validation: {e}"
     return {"error": str(last)[:500]} | diag
+
+
+def _safe_error(e: Exception) -> str:
+    """Error type and HTTP status only. Exception text can quote request data, e.g. a character of the
+    API key when the key does not encode as ASCII, so it never goes into the report."""
+    code = getattr(e, "status_code", None)
+    return f"{type(e).__name__}" + (f" (HTTP {code})" if code else "")
 
 
 def _diag(r, raw_text: str, marker: str) -> dict:
