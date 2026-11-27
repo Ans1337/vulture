@@ -4,20 +4,135 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Vulture · is this package safe?</title>
-<link rel="stylesheet" href="style.css">
+<style>
+  :root { --bg:#0e1014; --panel:#171a20; --panel2:#1f232b; --line:#2a2f39; --text:#e7e9ee; --muted:#8a91a1;
+          --accent:#5b8cff; --ok:#2fbf71; --warn:#f2a93b; --bad:#ef5a5a; }
+  * { box-sizing: border-box; }
+  body { margin:0; font:14px/1.5 system-ui,-apple-system,Segoe UI,sans-serif; background:var(--bg); color:var(--text); }
+  .wrap { max-width: 1040px; margin: 0 auto; padding: 28px 20px 60px; }
+  h1 { margin:0; font-size:24px; } .sub { color:var(--muted); margin:4px 0 22px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 18px; margin-bottom:14px; }
+  form { display:flex; gap:8px; flex-wrap:wrap; align-items:center; }
+  input[type=text] { flex:1; min-width:260px; background:var(--panel2); border:1px solid var(--line); color:var(--text); border-radius:8px; padding:10px 12px; font:inherit; }
+  input[type=file] { color:var(--muted); }
+  button { background:var(--accent); color:#fff; border:0; border-radius:8px; padding:10px 16px; font:inherit; font-weight:600; cursor:pointer; }
+  button:disabled { opacity:.5; }
+  .hint { color:var(--muted); font-size:12px; margin-top:8px; } .hint code { background:var(--panel2); padding:1px 5px; border-radius:4px; cursor:pointer; }
+  .stages { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px; }
+  .stage { padding:5px 11px; border-radius:99px; border:1px solid var(--line); color:var(--muted); font-size:12px; }
+  .stage.done { color:var(--ok); border-color:#2fbf7155; } .stage.on { color:var(--text); border-color:var(--accent); background:#5b8cff22; }
+  .log { font:12px/1.6 ui-monospace,Menlo,monospace; color:var(--muted); max-height:220px; overflow:auto; }
+  .log b { color:var(--text); font-weight:500; }
+  .verdict { display:flex; gap:18px; align-items:center; }
+  .big { font-size:30px; font-weight:800; letter-spacing:.5px; padding:8px 18px; border-radius:10px; }
+  .safe { color:var(--ok); background:#2fbf711c; } .suspicious { color:var(--warn); background:#f2a93b1c; } .malware { color:var(--bad); background:#ef5a5a1c; }
+  .incomplete { color:var(--muted); background:#8a91a11c; }
+  h3 { margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; } td, th { text-align:left; padding:5px 8px; border-top:1px solid var(--line); vertical-align:top; word-break:break-word; }
+  th { color:var(--muted); font-weight:500; border-top:0; }
+  .sev-high { color:var(--bad); } .sev-medium { color:var(--warn); } .sev-low { color:var(--muted); }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; } @media (max-width:800px){ .grid{grid-template-columns:1fr;} }
+  .mono { font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+  .pill { display:inline-block; font-size:11px; padding:1px 8px; border-radius:99px; background:var(--panel2); margin-right:4px; }
+  .recent a { color:var(--text); text-decoration:none; display:flex; justify-content:space-between; padding:5px 0; border-top:1px solid var(--line); }
+  .err { color:var(--bad); white-space:pre-wrap; font-family:ui-monospace,Menlo,monospace; font-size:12px; }
+  .empty { color:var(--muted); }
+</style>
 </head>
 <body>
-<header class="top">
-  <a class="brand" href="#/">🦅 Vulture</a>
-  <nav>
-    <a href="#/" data-nav="home">Scan</a>
-    <a href="#/history" data-nav="history">History</a>
-    <a href="#/approvals" data-nav="approvals">Approvals <span class="badge" id="appr-count" hidden></span></a>
-  </nav>
-  <span id="mock-flag" class="pill warn" hidden title="Showing sample data, no backend calls">sample data</span>
-</header>
-<main class="wrap" id="view"></main>
-<script src="mock.js"></script>
-<script src="app.js"></script>
+<div class="wrap">
+  <h1>🦅 Vulture</h1>
+  <div class="sub">Is this package safe to install? We detonate it in a sandbox full of fake secrets and a fake internet, then an AI agent writes the verdict.</div>
+
+  <div class="card">
+    <form id="f">
+      <input type="text" id="source" placeholder="npm package (left-pad@1.3.0) or GitHub URL (https://github.com/owner/repo)">
+      <input type="file" id="file" accept=".tgz,.tar.gz,.tar,.zip,.js">
+      <button id="go">Scan</button>
+    </form>
+    <div class="hint">Try: <code data-v="left-pad">left-pad</code> <code data-v="is-number@7.0.0">is-number@7.0.0</code>, or upload <code>samples/fake-malware/fake-stealer.tgz</code> (harmless fake malware).</div>
+  </div>
+
+  <div id="scan"></div>
+
+  <div class="card recent"><h3>Recent scans</h3><div id="recent" class="empty">None yet.</div></div>
+</div>
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let current = null, timer = null;
+document.querySelectorAll('[data-v]').forEach(c => c.onclick = () => $('#source').value = c.dataset.v);
+
+$('#f').onsubmit = async e => {
+  e.preventDefault();
+  const fd = new FormData();
+  fd.append('source', $('#source').value);
+  if ($('#file').files[0]) fd.append('file', $('#file').files[0]);
+  $('#go').disabled = true;
+  try {
+    const r = await fetch('/api/scans', { method: 'POST', body: fd });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.detail || r.statusText);
+    openScan(j.id);
+  } catch (err) { $('#scan').innerHTML = `<div class="card err">${esc(err.message)}</div>`; }
+  finally { $('#go').disabled = false; $('#file').value = ''; }
+};
+
+function openScan(id) { current = id; location.hash = id; clearInterval(timer); poll(); timer = setInterval(poll, 1200); }
+
+async function poll() {
+  const r = await fetch('/api/scans/' + current); if (!r.ok) return;
+  const s = await r.json(); render(s);
+  if (s.status === 'done' || s.status === 'failed') clearInterval(timer);
+  recent();
+}
+
+function table(rows, cols) {
+  if (!rows || !rows.length) return '<div class="empty">Nothing.</div>';
+  return `<table><tr>${cols.map(c => `<th>${c[0]}</th>`).join('')}</tr>${rows.map(r => `<tr>${cols.map(c => `<td>${c[1](r)}</td>`).join('')}</tr>`).join('')}</table>`;
+}
+
+function render(s) {
+  const idx = s.stages.indexOf(s.stage);
+  const stages = s.stages.map((st, i) => `<span class="stage ${s.status === 'done' || i < idx ? 'done' : i === idx ? 'on' : ''}">${i + 1}. ${st}</span>`).join('');
+  const log = s.events.map(e => `<div>[${e.t}s] <b>${esc(e.stage)}</b> ${esc(e.msg)}</div>`).join('');
+  let html = `<div class="card"><h3>Scanning ${esc(s.source)} · ${esc(s.status)}</h3><div class="stages">${stages}</div><div class="log" id="log">${log}</div>
+    ${s.error ? `<div class="err">${esc(s.error)}</div>` : ''}</div>`;
+  const rep = s.report;
+  if (rep) {
+    const ev = rep.evidence, ai = rep.ai && !rep.ai.error ? rep.ai : null, t = ev.target || {}, cov = rep.rules.coverage;
+    html += `<div class="card"><div class="verdict"><div class="big ${rep.verdict}">${rep.verdict.toUpperCase()}</div><div>
+        <div><b>${esc(t.name || s.source)}</b> ${esc(t.version || '')} <span class="mono" style="color:var(--muted)">${esc(t.pinned || '')}</span></div>
+        <div style="color:var(--muted)">risk score ${rep.rules.risk_score}/100 · ${ai ? `AI says ${esc(ai.verdict)} (confidence ${Math.round((ai.confidence || 0) * 100)}%) · verdict set by ${rep.verdict_source === 'ai' ? 'AI (raised above rules)' : 'rules'}${ai.note ? ` · <span style="color:var(--warn)">${esc(ai.note)}</span>` : ''}` : rep.ai && rep.ai.error ? 'rule-based (AI review failed, see below)' : 'rule-based (set VULTR_INFERENCE_API_KEY + AGENT_MODEL for the AI verdict)'}</div>
+        ${t.sha256 ? `<div class="mono" style="color:var(--muted)">sha256 ${esc(t.sha256)}</div>` : ''}
+        ${rep.isolation ? `<div style="color:var(--muted);font-size:12px">sandbox: ${esc(rep.isolation.technology)} · ${esc(rep.isolation.network)}</div>` : ''}</div></div>
+      ${ai ? `<p>${esc(ai.summary)}</p>${ai.recommendation ? `<p><b>Recommendation:</b> ${esc(ai.recommendation)}</p>` : ''}` : ''}
+      ${rep.ai && rep.ai.error ? `<p class="err">AI review unavailable (${esc(rep.ai.error)}). The verdict above is rule-based only.</p>` : ''}
+      ${cov && !cov.executed ? `<p class="incomplete" style="padding:8px 12px;border-radius:8px"><b>Not enough coverage to call this safe:</b> ${esc(cov.reason)}. The package's own code never ran in the sandbox, so seeing no bad behaviour proves nothing. Check the static findings below or scan a published package / tarball.</p>` : ''}
+      <ul>${rep.rules.reasons.map(r => `<li>${esc(r)}</li>`).join('') || '<li>No risky behaviour observed.</li>'}</ul></div>`;
+    if (ai && ai.indicators?.length) html += `<div class="card"><h3>Indicators</h3>${table(ai.indicators, [['Severity', i => `<span class="sev-${esc(i.severity)}">${esc(i.severity)}</span>`], ['Indicator', i => esc(i.title)], ['Evidence', i => esc(i.evidence)]])}</div>`;
+    if (ai && ai.dormant_triggers?.length) html += `<div class="card"><h3>Dormant code: what would trigger it</h3>${table(ai.dormant_triggers, [['File', d => `<span class="mono">${esc(d.file)}</span>`], ['Condition', d => esc(d.condition)], ['Would do', d => esc(d.would_do)]])}</div>`;
+    html += `<div class="grid">
+      <div class="card"><h3>🍯 Honeytokens touched</h3>${table(ev.honeytoken_access, [['File', h => `<span class="mono">${esc(h.file.replace(/^\/tmp\/runs\/[^/]+/, ''))}</span>`], ['Op', h => esc(h.op)], ['Run', h => esc(h.run)]])}</div>
+      <div class="card"><h3>📤 Secrets sent out</h3>${table(ev.exfiltration, [['Where', x => esc((x.host || x.sni || '') + (x.path || '') + (x.port ? ':' + x.port : ''))], ['Kind', x => esc(x.kind + (x.method ? ' ' + x.method : ''))]])}</div>
+      <div class="card"><h3>🌐 Fake internet: lookups & requests</h3>${ev.dns_lookups.map(d => `<span class="pill">${esc(d)}</span>`).join('') || ''}${table(ev.requests, [['Kind', x => esc(x.kind)], ['Target', x => esc((x.host || x.sni || '') + (x.path || '') + ' :' + x.port)], ['Body', x => `<span class="mono">${esc((x.body || x.data || '').slice(0, 120))}</span>`]])}</div>
+      <div class="card"><h3>⚙️ Processes spawned</h3>${table(ev.processes, [['Command', p => `<span class="mono">${esc(p.argv.join(' ').slice(0, 160))}</span>`], ['Run', p => esc(p.run)]])}</div>
+    </div>
+    <div class="card"><h3>Persona × clock matrix</h3>${table(Object.entries(ev.matrix), [['Run', r => esc(r[0])], ['Honeytoken hits', r => r[1].honeytoken_hits], ['Network calls', r => r[1].network], ['Processes', r => r[1].processes]])}</div>
+    <div class="card"><h3>Static findings (${ev.static_summary.high || 0} high · ${ev.static_summary.medium || 0} medium)</h3>
+      ${ev.install_scripts.length ? `<p>Install scripts: ${ev.install_scripts.map(i => `<span class="pill">${esc(i.package)} ${esc(i.hook)}: ${esc(i.command)}</span>`).join('')}</p>` : ''}
+      ${table(ev.static_findings.filter(f => f.severity !== 'low').slice(0, 30), [['Sev', f => `<span class="sev-${f.severity}">${f.severity}</span>`], ['Rule', f => esc(f.rule)], ['Where', f => `<span class="mono">${esc(f.file)}:${f.line}</span>`], ['Code', f => `<span class="mono">${esc(f.snippet)}</span>`]])}</div>`;
+  }
+  $('#scan').innerHTML = html;
+  const l = $('#log'); if (l) l.scrollTop = l.scrollHeight;
+}
+
+async function recent() {
+  const r = await fetch('/api/scans'); const list = await r.json();
+  $('#recent').innerHTML = list.map(s => `<a href="#${s.id}" onclick="openScan('${s.id}')"><span>${esc(s.source)}</span><span class="${s.verdict || ''}">${esc(s.verdict ? s.verdict.toUpperCase() : s.status)}</span></a>`).join('') || 'None yet.';
+}
+recent();
+if (location.hash.length > 1) openScan(location.hash.slice(1));
+</script>
 </body>
 </html>

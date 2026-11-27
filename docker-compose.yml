@@ -1,6 +1,6 @@
 # Vulture MVP. Start everything with ./start.sh, then open http://localhost:8000
-# The API needs APP_TOKEN (see docs/lock-down.md) and is published on 127.0.0.1 only. On a VM put a
-# TLS reverse proxy in front (see infra/README.md); VULTURE_API_BIND=host:port changes the bind.
+# The API has no authentication: it is published on 127.0.0.1 only. On a VM either put a
+# reverse proxy with auth in front (see infra/README.md); VULTURE_API_BIND=host:port changes the bind.
 services:
   api:
     build: { context: ., dockerfile: api/Dockerfile }
@@ -9,16 +9,8 @@ services:
       DOCKER_HOST: tcp://docker-proxy:2375
       PYTHONDONTWRITEBYTECODE: 1
     ports: ["${VULTURE_API_BIND:-127.0.0.1:8000}:8000"]
-    volumes:
-      - vulture-data:/data                      # scan history (SQLite): survives restarts and redeploys
-      # SANDBOX_MODE=vultr: the private half of the SSH key registered at Vultr (VULTR_SSH_KEY_ID)
-      # - ./secrets/vultr_ssh_key:/run/secrets/vultr_ssh_key:ro
     depends_on: [docker-proxy]
-    restart: unless-stopped
-    mem_limit: 512m
-    memswap_limit: 512m
-    pids_limit: 256
-    # Read-only root: the only writable places are /tmp and the /data volume.
+    # Scans and uploads live in memory; the app writes nothing to disk.
     read_only: true
     tmpfs: [/tmp]
     cap_drop: [ALL]
@@ -33,9 +25,6 @@ services:
     environment: { DISABLE_IPV6: 1, CONTAINERS: 1, POST: 1, NETWORKS: 1, VOLUMES: 1, IMAGES: 0, EXEC: 0, BUILD: 0 }
     volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
     security_opt: ["no-new-privileges:${SANDBOX_NO_NEW_PRIVILEGES:-1}"]
-    restart: unless-stopped
-    mem_limit: 64m
-    pids_limit: 64
 
   # Build-only images used inside the sandbox
   worker:
@@ -46,6 +35,3 @@ services:
     build: ./sandbox-images/sinkhole
     image: vulture-sinkhole:latest
     profiles: [build]
-
-volumes:
-  vulture-data:
