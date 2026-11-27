@@ -40,23 +40,28 @@ def _stream(container, emit: Emit, timeout: int) -> dict:
                     return
             except Exception:
                 return
+        # Deadline hit: kill and remove at once so nothing keeps running until the finally-cleanup.
         try:
-            container.kill()
+            container.remove(force=True)
         except Exception:
             pass
 
     threading.Thread(target=watchdog, daemon=True).start()
     buf = b""
-    for chunk in container.logs(stream=True, follow=True):
-        buf += chunk
-        while b"\n" in buf:
-            line, buf = buf.split(b"\n", 1)
-            text = line.decode(errors="replace")
-            if text.startswith("PROGRESS "):
-                d = json.loads(text[9:])
-                emit(d.pop("stage"), d.pop("msg"), d)
-            elif text.startswith("RESULT "):
-                result = json.loads(text[7:])
+    try:
+        for chunk in container.logs(stream=True, follow=True):
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                text = line.decode(errors="replace")
+                if text.startswith("PROGRESS "):
+                    d = json.loads(text[9:])
+                    emit(d.pop("stage"), d.pop("msg"), d)
+                elif text.startswith("RESULT "):
+                    result = json.loads(text[7:])
+    except (docker.errors.APIError, docker.errors.NotFound, OSError):
+        if time.time() < deadline:
+            raise  # only swallow the stream breaking because the watchdog removed the container
     if not result:
         result = {"error": "worker produced no result (timed out or crashed)"}
     return result

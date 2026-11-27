@@ -4,7 +4,7 @@ under strace, with honeytokens planted, and report everything it touched.
 Env: MARKER (unique honeytoken marker), PERSONAS (comma list), CLOCKS (comma list,
 e.g. "0,+30d,+90d"), STEP_TIMEOUT (seconds per command).
 """
-import json, os, re, shutil, subprocess, time
+import json, os, re, shutil, signal, subprocess, time
 from pathlib import Path
 from common import progress, result
 
@@ -148,16 +148,43 @@ def parse_trace(path: Path, home: Path, project: Path, tokens: list[str]):
     }
 
 
+def _kill_leftovers(pgid):
+    """Kill the step's process group, then anything else still alive in the container
+    (a child that called setsid() escapes the group). Only tini (pid 1) and we survive."""
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+    me = os.getpid()
+    for d in os.listdir("/proc"):
+        if d.isdigit() and int(d) not in (1, me):
+            try:
+                os.kill(int(d), signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
+
+
 def run_cmd(label, cmd, cwd, env, trace_dir, timeout):
     trace = trace_dir / f"{label}.strace"
     full = ["strace", "-f", "-qq", "-s", "256", "-o", str(trace),
             "-e", "trace=execve,openat,open,connect,sendto,unlink,unlinkat,rename,renameat,renameat2", *cmd]
     t0 = time.time()
-    try:
-        p = subprocess.run(full, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
-        rc, out = p.returncode, (p.stdout + p.stderr)[-3000:]
-    except subprocess.TimeoutExpired as e:
-        rc, out = "timeout", ((e.stdout or b"").decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or ""))[-3000:]
+    # Own session/process group so a timeout kills strace AND every traced descendant.
+    # Output goes to a file, not a pipe: a surviving grandchild holding the pipe can't hang us.
+    out_path = trace_dir / f"{label}.out"
+    with open(out_path, "wb") as fout:
+        p = subprocess.Popen(full, cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=fout,
+                             stderr=subprocess.STDOUT, start_new_session=True)
+        try:
+            rc = p.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            rc = "timeout"
+        _kill_leftovers(p.pid)
+        try:
+            p.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            pass
+    out = out_path.read_bytes()[-12000:].decode(errors="replace")[-3000:]
     return {"label": label, "cmd": " ".join(cmd)[:300], "exit": rc, "seconds": round(time.time() - t0, 1),
             "output": out}, trace
 
