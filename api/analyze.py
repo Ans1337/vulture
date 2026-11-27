@@ -15,6 +15,15 @@ HOOKS = ("preinstall", "install", "postinstall")
 LOADED = "[vulture] loading "
 MALWARE_AT, SUSPICIOUS_AT = 60, 25
 SEVERITY = {"safe": 0, "incomplete": 0, "suspicious": 1, "malware": 2}
+# Audit #13/#33: say plainly what the sandbox is. Static text: keep in sync with orchestrator.py.
+ISOLATION = {
+    "technology": "docker (runc) container, shares the host kernel (not a VM / gVisor)",
+    "network": "internal docker network without internet; DNS and traffic go to a sinkhole (fake internet)",
+    "filesystem": "read-only root, package volume mounted read-only, writable tmpfs /tmp",
+    "privileges": "all capabilities dropped, no-new-privileges",
+    "limits": "1 GB memory, 2 CPUs, 512 pids, per-step timeout",
+    "observation": "strace (execve/open/connect/unlink/rename) + sinkhole log",
+}
 
 
 def coverage(raw: dict) -> dict:
@@ -209,4 +218,5 @@ def report(raw: dict) -> dict:
     final, source = rules["verdict"], "rules"
     if ai and SEVERITY.get(ai.get("verdict"), -1) > SEVERITY[final]:
         final, source = ai["verdict"], "ai"
-    return {"verdict": final, "verdict_source": source, "rules": rules, "ai": ai, "evidence": ev}
+    return {"verdict": final, "verdict_source": source, "rules": rules, "ai": ai, "evidence": ev,
+            "isolation": dict(ISOLATION)}

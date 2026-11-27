@@ -104,7 +104,8 @@ function render(s) {
     html += `<div class="card"><div class="verdict"><div class="big ${rep.verdict}">${rep.verdict.toUpperCase()}</div><div>
         <div><b>${esc(t.name || s.source)}</b> ${esc(t.version || '')} <span class="mono" style="color:var(--muted)">${esc(t.pinned || '')}</span></div>
         <div style="color:var(--muted)">risk score ${rep.rules.risk_score}/100 · ${ai ? `AI says ${esc(ai.verdict)} (confidence ${Math.round((ai.confidence || 0) * 100)}%) · verdict set by ${rep.verdict_source === 'ai' ? 'AI (raised above rules)' : 'rules'}` : rep.ai && rep.ai.error ? 'rule-based (AI review failed, see below)' : 'rule-based (set VULTR_INFERENCE_API_KEY + AGENT_MODEL for the AI verdict)'}</div>
-        ${t.sha256 ? `<div class="mono" style="color:var(--muted)">sha256 ${esc(t.sha256)}</div>` : ''}</div></div>
+        ${t.sha256 ? `<div class="mono" style="color:var(--muted)">sha256 ${esc(t.sha256)}</div>` : ''}
+        ${rep.isolation ? `<div style="color:var(--muted);font-size:12px">sandbox: ${esc(rep.isolation.technology)} · ${esc(rep.isolation.network)}</div>` : ''}</div></div>
       ${ai ? `<p>${esc(ai.summary)}</p>${ai.recommendation ? `<p><b>Recommendation:</b> ${esc(ai.recommendation)}</p>` : ''}` : ''}
       ${rep.ai && rep.ai.error ? `<p class="err">AI review unavailable (${esc(rep.ai.error)}). The verdict above is rule-based only.</p>` : ''}
       ${cov && !cov.executed ? `<p class="incomplete" style="padding:8px 12px;border-radius:8px"><b>Not enough coverage to call this safe:</b> ${esc(cov.reason)}. The package's own code never ran in the sandbox, so seeing no bad behaviour proves nothing. Check the static findings below or scan a published package / tarball.</p>` : ''}

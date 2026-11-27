@@ -11,6 +11,8 @@
                  "description": "incomplete = the package's own code never ran in the sandbox (no install scripts, no entry point, or detonation failed), so absence of evidence proves nothing" },
     "verdict_source": { "enum": ["rules", "ai"],
                         "description": "which source set the final verdict; the AI can only raise the rule-based one" },
+    "isolation": { "type": "object", "additionalProperties": { "type": "string" },
+                   "description": "plain description of the sandbox the package ran in (technology, network, ...)" },
     "confidence": { "type": "number", "minimum": 0, "maximum": 1 },
     "summary": { "type": "string" },
     "indicators": { "type": "array", "items": { "type": "object" } },
