@@ -102,7 +102,11 @@ def run_scan(scan_id: str, source: str, upload: Optional[tuple[str, bytes]], emi
                                      labels={"vulture.scan": scan_id})
         sink = client.containers.run(SINKHOLE_IMAGE, detach=True, network=net.name,
                                      name=f"vulture-sink-{scan_id}", labels={"vulture.scan": scan_id},
-                                     mem_limit="256m")
+                                     mem_limit="256m", pids_limit=128, nano_cpus=500_000_000,
+                                     user="1000:1000", cap_drop=["ALL"], security_opt=["no-new-privileges"],
+                                     read_only=True,
+                                     # bind 53/80/443/... as non-root without CAP_NET_BIND_SERVICE
+                                     sysctls={"net.ipv4.ip_unprivileged_port_start": "0"})
         created.append(sink)
         sink_ip = None
         for _ in range(30):
