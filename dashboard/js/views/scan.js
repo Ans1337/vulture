@@ -65,7 +65,7 @@ export default function scanView(el, id) {
     const live = LIVE.includes(scan.status);
     const gate = live ? d.approvals.find(a => a.state === 'pending') : null;
     if (live) wasLive = true;
-    const elapsed = live ? Date.now() / 1000 - scan.created : d.elapsed;
+    const elapsed = live ? Date.now() / 1000 - scan.created : scan.finished ? scan.finished - scan.created : d.elapsed;
     const rep = scan.report, v = rep?.verdict;
 
     $('#eyebrow', el).textContent = live ? (gate ? 'Paused for approval' : scan.status === 'queued' ? 'Queued' : 'Scanning') : scan.status === 'done' ? 'Scan finished' : 'Scan stopped';
@@ -97,15 +97,17 @@ export default function scanView(el, id) {
     if (d.vm) {
       $('#vm-card', el).hidden = false;
       const cur = d.vm.current, failed = cur === 'destroy_failed';
+      const unconfirmed = !live && cur !== 'destroyed' && !failed;
       const idx = failed ? 3 : VM_NODES.findIndex(n => n[0] === cur);
       patch($('#vm', el), VM_NODES.map(([st, label, ic], i) => {
         const last = st === 'destroyed';
-        const cls = last && failed ? 'fail' : last && cur === 'destroyed' ? 'gone' : i < idx ? 'done' : i === idx ? 'now' : '';
-        return `${i ? `<div class="bar ${i <= idx ? 'on' : ''}"></div>` : ''}<div class="n ${cls}"><div class="d">${icon(last && failed ? 'x' : ic)}</div><span>${last && failed ? 'Destroy failed' : label}</span></div>`;
+        const reached = i < idx || (unconfirmed && i === idx && cur === 'ready');
+        const cls = last && (failed || unconfirmed) ? 'fail' : last && cur === 'destroyed' ? 'gone' : reached ? 'done' : i === idx && !unconfirmed ? 'now' : '';
+        return `${i ? `<div class="bar ${i <= idx ? 'on' : ''}"></div>` : ''}<div class="n ${cls}"><div class="d">${icon(last && failed ? 'x' : last && unconfirmed ? 'alert' : ic)}</div><span>${last && failed ? 'Destroy failed' : last && unconfirmed ? 'Not confirmed' : label}</span></div>`;
       }).join(''));
       patch($('#vm-meta', el), d.vm.id ? `<span>Instance <b class="mono">${esc(d.vm.id)}</b></span>` : '');
       $('#vm-meta', el).hidden = !d.vm.id;
-      patch($('#vm-aside', el), cur === 'destroyed' ? 'destroyed, nothing left behind' : failed ? 'the janitor will retry' : '');
+      patch($('#vm-aside', el), cur === 'destroyed' ? 'destroyed, nothing left behind' : failed ? 'the janitor will retry' : unconfirmed ? 'check Vultr: the VM may still be running' : '');
     }
 
     // runs

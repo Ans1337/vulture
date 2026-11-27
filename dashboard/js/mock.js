@@ -441,6 +441,10 @@ function materialize(rec, after = 0) {
     .filter(e => e.at <= elapsed && (!e.when || e.when === decision))
     .sort((a, b) => a.at - b.at)
     .map((e, i) => ({ id: i + 1, t: Math.round(e.at * 10) / 10, stage: e.stage, msg: e.msg, data: e.data || {} }));
+  // like the server, a cancelled scan reports that its VM was destroyed
+  if (rec.cancelledAt != null && events.some(e => e.data.vm) && !events.some(e => e.data.vm === 'destroyed')) {
+    events.push({ id: events.length + 1, t: Math.round(rec.cancelledAt * 10) / 10, stage: 'destroy', msg: 'Vultr VM destroyed', data: { vm: 'destroyed', vm_report: { vm_id: VMID, destroyed: true } } });
+  }
   let status = elapsed < 0.2 ? 'queued' : 'running', report = null, error = null, finished = null;
   if (rec.cancelledAt != null) { status = 'cancelled'; error = 'cancelled by user'; finished = started + rec.cancelledAt; }
   else if (elapsed >= sc.end) {

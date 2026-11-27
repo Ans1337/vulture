@@ -112,11 +112,12 @@ export function derive(scan) {
   const settingUp = scan.status !== 'done' && cur < 0 && events.some(setup);
   if (cur < 0) cur = stopped ? 0 : stageIds.indexOf(scan.stage);
   if (scan.status === 'done') cur = stageIds.length;
-  const destroyed = events.some(e => e.stage === 'destroy');
+  // "destroy" is only done when a teardown reports it: a restart also logs under this stage, without removing anything
+  const destroyed = events.some(e => e.data?.lifecycle?.destroyed || e.data?.vm === 'destroyed');
   stageIds.forEach((id, i) => {
     let state = i < cur ? 'done' : i === cur ? (stopped ? 'fail' : 'on') : 'todo';
     if (settingUp) state = id === 'sandbox' ? (stopped ? 'fail' : 'on') : 'todo';
-    if (stopped && id === 'destroy' && destroyed) state = 'done';
+    if (stopped && id === 'destroy') state = destroyed ? 'done' : 'todo';
     out.stages.push({ id, label: STAGE_INFO[id]?.label || id, state, retries: retryByStage[id] || 0 });
   });
   return out;
