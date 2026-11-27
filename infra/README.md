@@ -58,11 +58,12 @@ API responds. Recreating the API clears in-memory scan history and interrupts ac
 After the first deployment, use `/opt/vulture-main` for the deployed source, and keep editing
 production secrets in `/root/vulture/.env`.
 
-## Hardening: the API has no authentication
+## Hardening: access token and bind address
 
-The API is published on `127.0.0.1` only (`VULTURE_API_BIND`, default `127.0.0.1:8000`; the
-deployment uses `127.0.0.1:8001`). Keep it behind the reverse proxy (Caddy) and add auth there,
-e.g. `basic_auth`. Do not bind it to `0.0.0.0`: ports published by Docker bypass `ufw`.
+Set `APP_TOKEN` in `/root/vulture/.env` to require a token on every `/api/*` call (empty = open), plus
+`TRUST_PROXY_HEADERS=1` behind Caddy. See [docs/lock-down.md](../docs/lock-down.md). The API is also published on
+`127.0.0.1` only (`VULTURE_API_BIND`, default `127.0.0.1:8000`; the deployment uses `127.0.0.1:8001`),
+with Caddy providing TLS. Do not bind it to `0.0.0.0`: ports published by Docker bypass `ufw`.
 
 ## Hardening: block cloud metadata from containers
 
@@ -81,6 +82,6 @@ anyway; this rule is for the fetch stage.
 
 ## Not covered yet
 
-- Throwaway Vultr instance per scan (today: throwaway containers per scan on this VM).
+- Throwaway Vultr instance per scan is implemented (`SANDBOX_MODE=vultr`) but not yet exercised against the live Vultr API; the default is still containers on this VM.
 - Restricting the docker-proxy: `POST` + `CONTAINERS` is host-root equivalent for whoever controls
-  the API. Keep the API behind auth.
+  the API. Keep `APP_TOKEN` secret.
