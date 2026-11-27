@@ -44,26 +44,31 @@ def _stream(container, emit: Emit, timeout: int) -> dict:
                     return
             except Exception:
                 return
+        # Deadline hit: kill and remove at once so nothing keeps running until the finally-cleanup.
         try:
-            container.kill()
+            container.remove(force=True)
         except Exception:
             pass
 
     threading.Thread(target=watchdog, daemon=True).start()
     buf = b""
     other: list[str] = []  # anything that isn't PROGRESS/RESULT (tracebacks, npm errors)
-    for chunk in container.logs(stream=True, follow=True):
-        buf += chunk
-        while b"\n" in buf:
-            line, buf = buf.split(b"\n", 1)
-            text = line.decode(errors="replace")
-            if text.startswith("PROGRESS "):
-                d = json.loads(text[9:])
-                emit(d.pop("stage"), d.pop("msg"), d)
-            elif text.startswith("RESULT "):
-                result = json.loads(text[7:])
-            elif text.strip():
-                other = (other + [text])[-15:]
+    try:
+        for chunk in container.logs(stream=True, follow=True):
+            buf += chunk
+            while b"\n" in buf:
+                line, buf = buf.split(b"\n", 1)
+                text = line.decode(errors="replace")
+                if text.startswith("PROGRESS "):
+                    d = json.loads(text[9:])
+                    emit(d.pop("stage"), d.pop("msg"), d)
+                elif text.startswith("RESULT "):
+                    result = json.loads(text[7:])
+                elif text.strip():
+                    other = (other + [text])[-15:]
+    except (docker.errors.APIError, docker.errors.NotFound, OSError):
+        if time.time() < deadline:
+            raise  # only swallow the stream breaking because the watchdog removed the container
     if not result:
         try:
             container.reload()
@@ -110,7 +115,11 @@ def run_scan(scan_id: str, source: str, upload: Optional[tuple[str, bytes]], emi
                                      labels={"vulture.scan": scan_id})
         sink = client.containers.run(SINKHOLE_IMAGE, detach=True, network=net.name,
                                      name=f"vulture-sink-{scan_id}", labels={"vulture.scan": scan_id},
-                                     mem_limit="256m")
+                                     mem_limit="256m", pids_limit=128, nano_cpus=500_000_000,
+                                     user="1000:1000", cap_drop=["ALL"], security_opt=SECURITY_OPT,
+                                     read_only=True,
+                                     # bind 53/80/443/... as non-root without CAP_NET_BIND_SERVICE
+                                     sysctls={"net.ipv4.ip_unprivileged_port_start": "0"})
         created.append(sink)
         sink_ip = None
         for _ in range(30):

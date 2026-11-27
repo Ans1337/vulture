@@ -57,3 +57,30 @@ A successful run verifies the served dashboard matches the checked-out HTML and 
 API responds. Recreating the API clears in-memory scan history and interrupts active scans.
 After the first deployment, use `/opt/vulture-main` for the deployed source, and keep editing
 production secrets in `/root/vulture/.env`.
+
+## Hardening: the API has no authentication
+
+The API is published on `127.0.0.1` only (`VULTURE_API_BIND`, default `127.0.0.1:8000`; the
+deployment uses `127.0.0.1:8001`). Keep it behind the reverse proxy (Caddy) and add auth there,
+e.g. `basic_auth`. Do not bind it to `0.0.0.0`: ports published by Docker bypass `ufw`.
+
+## Hardening: block cloud metadata from containers
+
+The fetch container has normal network access (npm registry, GitHub). On a cloud VM that includes
+the metadata service at `169.254.169.254`. Drop traffic from Docker bridges to it in the
+`DOCKER-USER` chain (Docker leaves this chain to the admin):
+
+```bash
+sudo iptables -I DOCKER-USER -i docker0 -d 169.254.169.254 -j DROP
+sudo iptables -I DOCKER-USER -i br-+ -d 169.254.169.254 -j DROP    # compose / per-scan networks
+```
+
+Check: `sudo iptables -L DOCKER-USER -n -v`. The rules are not persistent; re-add them after a reboot
+(or save them with `iptables-persistent`). The detonation network is `internal` and has no route out
+anyway; this rule is for the fetch stage.
+
+## Not covered yet
+
+- Throwaway Vultr instance per scan (today: throwaway containers per scan on this VM).
+- Restricting the docker-proxy: `POST` + `CONTAINERS` is host-root equivalent for whoever controls
+  the API. Keep the API behind auth.

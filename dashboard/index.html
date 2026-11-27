@@ -26,6 +26,7 @@
   .verdict { display:flex; gap:18px; align-items:center; }
   .big { font-size:30px; font-weight:800; letter-spacing:.5px; padding:8px 18px; border-radius:10px; }
   .safe { color:var(--ok); background:#2fbf711c; } .suspicious { color:var(--warn); background:#f2a93b1c; } .malware { color:var(--bad); background:#ef5a5a1c; }
+  .incomplete { color:var(--muted); background:#8a91a11c; }
   h3 { margin:0 0 8px; font-size:13px; text-transform:uppercase; letter-spacing:.6px; color:var(--muted); }
   table { width:100%; border-collapse:collapse; font-size:12.5px; } td, th { text-align:left; padding:5px 8px; border-top:1px solid var(--line); vertical-align:top; word-break:break-word; }
   th { color:var(--muted); font-weight:500; border-top:0; }
@@ -99,13 +100,15 @@ function render(s) {
     ${s.error ? `<div class="err">${esc(s.error)}</div>` : ''}</div>`;
   const rep = s.report;
   if (rep) {
-    const ev = rep.evidence, ai = rep.ai && !rep.ai.error ? rep.ai : null, t = ev.target || {};
+    const ev = rep.evidence, ai = rep.ai && !rep.ai.error ? rep.ai : null, t = ev.target || {}, cov = rep.rules.coverage;
     html += `<div class="card"><div class="verdict"><div class="big ${rep.verdict}">${rep.verdict.toUpperCase()}</div><div>
         <div><b>${esc(t.name || s.source)}</b> ${esc(t.version || '')} <span class="mono" style="color:var(--muted)">${esc(t.pinned || '')}</span></div>
-        <div style="color:var(--muted)">risk score ${rep.rules.risk_score}/100 · ${ai ? `AI confidence ${Math.round((ai.confidence || 0) * 100)}%` : 'rule-based (set VULTR_INFERENCE_API_KEY + AGENT_MODEL for the AI verdict)'}</div>
-        ${t.sha256 ? `<div class="mono" style="color:var(--muted)">sha256 ${esc(t.sha256)}</div>` : ''}</div></div>
+        <div style="color:var(--muted)">risk score ${rep.rules.risk_score}/100 · ${ai ? `AI says ${esc(ai.verdict)} (confidence ${Math.round((ai.confidence || 0) * 100)}%) · verdict set by ${rep.verdict_source === 'ai' ? 'AI (raised above rules)' : 'rules'}${ai.note ? ` · <span style="color:var(--warn)">${esc(ai.note)}</span>` : ''}` : rep.ai && rep.ai.error ? 'rule-based (AI review failed, see below)' : 'rule-based (set VULTR_INFERENCE_API_KEY + AGENT_MODEL for the AI verdict)'}</div>
+        ${t.sha256 ? `<div class="mono" style="color:var(--muted)">sha256 ${esc(t.sha256)}</div>` : ''}
+        ${rep.isolation ? `<div style="color:var(--muted);font-size:12px">sandbox: ${esc(rep.isolation.technology)} · ${esc(rep.isolation.network)}</div>` : ''}</div></div>
       ${ai ? `<p>${esc(ai.summary)}</p>${ai.recommendation ? `<p><b>Recommendation:</b> ${esc(ai.recommendation)}</p>` : ''}` : ''}
-      ${rep.ai && rep.ai.error ? `<p class="err">${esc(rep.ai.error)}</p>` : ''}
+      ${rep.ai && rep.ai.error ? `<p class="err">AI review unavailable (${esc(rep.ai.error)}). The verdict above is rule-based only.</p>` : ''}
+      ${cov && !cov.executed ? `<p class="incomplete" style="padding:8px 12px;border-radius:8px"><b>Not enough coverage to call this safe:</b> ${esc(cov.reason)}. The package's own code never ran in the sandbox, so seeing no bad behaviour proves nothing. Check the static findings below or scan a published package / tarball.</p>` : ''}
       <ul>${rep.rules.reasons.map(r => `<li>${esc(r)}</li>`).join('') || '<li>No risky behaviour observed.</li>'}</ul></div>`;
     if (ai && ai.indicators?.length) html += `<div class="card"><h3>Indicators</h3>${table(ai.indicators, [['Severity', i => `<span class="sev-${esc(i.severity)}">${esc(i.severity)}</span>`], ['Indicator', i => esc(i.title)], ['Evidence', i => esc(i.evidence)]])}</div>`;
     if (ai && ai.dormant_triggers?.length) html += `<div class="card"><h3>Dormant code: what would trigger it</h3>${table(ai.dormant_triggers, [['File', d => `<span class="mono">${esc(d.file)}</span>`], ['Condition', d => esc(d.condition)], ['Would do', d => esc(d.would_do)]])}</div>`;

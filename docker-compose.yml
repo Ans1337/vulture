@@ -1,18 +1,30 @@
 # Vulture MVP. Start everything with ./start.sh, then open http://localhost:8000
+# The API has no authentication: it is published on 127.0.0.1 only. On a VM either put a
+# reverse proxy with auth in front (see infra/README.md); VULTURE_API_BIND=host:port changes the bind.
 services:
   api:
     build: { context: ., dockerfile: api/Dockerfile }
     env_file: .env
     environment:
       DOCKER_HOST: tcp://docker-proxy:2375
-    ports: ["${VULTURE_API_BIND:-8000}:8000"]
+      PYTHONDONTWRITEBYTECODE: 1
+    ports: ["${VULTURE_API_BIND:-127.0.0.1:8000}:8000"]
     depends_on: [docker-proxy]
+    # Scans and uploads live in memory; the app writes nothing to disk.
+    read_only: true
+    tmpfs: [/tmp]
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:${SANDBOX_NO_NEW_PRIVILEGES:-1}"]
 
   # The API only reaches Docker through this filtered proxy, never the raw socket.
+  # Caveat: POST + CONTAINERS lets whoever controls the API create any container, including a
+  # privileged one (host-root equivalent). Filtering request bodies needs an authz proxy (future work).
+  # Not read_only: the image's entrypoint renders haproxy.cfg into /usr/local/etc/haproxy at start.
   docker-proxy:
     image: tecnativa/docker-socket-proxy:0.3.0
     environment: { DISABLE_IPV6: 1, CONTAINERS: 1, POST: 1, NETWORKS: 1, VOLUMES: 1, IMAGES: 0, EXEC: 0, BUILD: 0 }
     volumes: ["/var/run/docker.sock:/var/run/docker.sock:ro"]
+    security_opt: ["no-new-privileges:${SANDBOX_NO_NEW_PRIVILEGES:-1}"]
 
   # Build-only images used inside the sandbox
   worker:
