@@ -4,8 +4,8 @@ with --ignore-scripts, then run the static pass.
     fetch.py <source>
 source: npm:<name>[@version] | <name>[@version] | https://github.com/<o>/<r>[.git][#ref] | upload
 """
-import hashlib, json, os, re, shutil, subprocess, sys, tarfile, zipfile
-from pathlib import Path
+import hashlib, json, os, re, shutil, stat, subprocess, sys, tarfile, zipfile
+from pathlib import Path, PurePosixPath
 from common import progress, result, fail, parse_source
 import static_scan
 
@@ -48,11 +48,22 @@ def tar_members(tf):
     return members
 
 
+def check_entry_path(dest, name):
+    """Reject (not skip) absolute names and anything that could land outside dest."""
+    parts = PurePosixPath(name).parts
+    if name.startswith(("/", "\\")) or ".." in parts or not (dest / name).resolve().is_relative_to(dest.resolve()):
+        fail(f"archive entry escapes the package directory: {name[:200]!r}")
+
+
 def safe_extract_tar(tf, dest):
-    for m in tar_members(tf):
-        target = (dest / m.name).resolve()
-        if not str(target).startswith(str(dest.resolve())) or m.issym() or m.islnk() or m.isdev():
-            continue
+    members = tar_members(tf)
+    for m in members:
+        check_entry_path(dest, m.name)
+        if m.issym() or m.islnk():
+            fail(f"archive contains a link: {m.name[:200]!r} -> {m.linkname[:200]!r}")
+        if not (m.isreg() or m.isdir()):
+            fail(f"archive contains a device or special file: {m.name[:200]!r}")
+    for m in members:
         tf.extract(m, dest, set_attrs=False, filter="data") if sys.version_info >= (3, 12) else tf.extract(m, dest)
 
 
@@ -64,7 +75,11 @@ def fetch_npm(spec):
     tgz = WORK / "dl" / out["filename"]
     with tarfile.open(tgz) as tf:
         safe_extract_tar(tf, WORK / "dl")
-    shutil.move(str(WORK / "dl" / "package"), PKG)
+    # usually package/, but some tarballs (e.g. @types/*) use another top-level dir name
+    tops = [p for p in (WORK / "dl").iterdir() if p.is_dir()]
+    if len(tops) != 1:
+        fail(f"unexpected npm tarball layout: {sorted(p.name for p in tops)[:5]}")
+    shutil.move(str(tops[0]), PKG)
     return {"type": "npm", "name": out["name"], "version": out["version"], "integrity": out.get("integrity"),
             "sha256": sha256(tgz), "pinned": f"{out['name']}@{out['version']}"}
 
@@ -105,10 +120,14 @@ def fetch_upload():
     elif f.name.endswith(".zip"):
         with zipfile.ZipFile(f) as z:
             check_limits(len(z.infolist()), sum(i.file_size for i in z.infolist()), "archive")
-            for n in z.namelist():
-                t = (PKG / n).resolve()
-                if str(t).startswith(str(PKG.resolve())):
-                    z.extract(n, PKG)
+            for i in z.infolist():
+                check_entry_path(PKG, i.filename)
+                kind = stat.S_IFMT(i.external_attr >> 16)  # unix mode, 0 for DOS/Windows zips
+                if kind == stat.S_IFLNK:
+                    fail(f"archive contains a link: {i.filename[:200]!r}")
+                if kind not in (0, stat.S_IFREG, stat.S_IFDIR):
+                    fail(f"archive contains a device or special file: {i.filename[:200]!r}")
+            z.extractall(PKG)
     else:
         shutil.copy(f, PKG / f.name)
     # macOS tar/zip add AppleDouble files (._*) and __MACOSX/; drop them so the package root is found
