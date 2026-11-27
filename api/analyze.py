@@ -144,6 +144,24 @@ Reply with ONE JSON object only:
  "recommendation": "..."}"""
 
 
+_S = {"type": "string"}
+AI_RESPONSE_FORMAT = {"type": "json_schema", "json_schema": {"name": "vulture_verdict", "strict": True, "schema": {
+    "type": "object", "additionalProperties": False,
+    "required": ["verdict", "confidence", "summary", "indicators", "dormant_triggers", "recommendation"],
+    "properties": {
+        "verdict": {"type": "string", "enum": ["safe", "suspicious", "malware"]},
+        "confidence": {"type": "number"},
+        "summary": _S,
+        "indicators": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False, "required": ["title", "severity", "evidence"],
+            "properties": {"title": _S, "severity": {"type": "string", "enum": ["low", "medium", "high"]},
+                           "evidence": _S}}},
+        "dormant_triggers": {"type": "array", "items": {
+            "type": "object", "additionalProperties": False, "required": ["file", "condition", "would_do"],
+            "properties": {"file": _S, "condition": _S, "would_do": _S}}},
+        "recommendation": _S}}}}
+
+
 def _str(x) -> bool:
     return isinstance(x, str) and bool(x.strip())
 
@@ -183,24 +201,28 @@ def llm_report(ev: dict, rules: dict, marker: str = "") -> dict | None:
         content = content.replace(marker, "<HONEYTOKEN>")   # Audit #27: never send the scan marker out
     content = content[:60000]
     last, diag = "no reply", {}
+    # Reasoning tokens count against max_tokens: with 1500 and default effort the model often spent
+    # all of them thinking and returned empty content (finish_reason=length). Low effort + 4000 tokens,
+    # and a JSON schema so the reply is a bare object. One retry, and only when validation fails.
     for _ in range(2):
         try:
-            r = client.chat.completions.create(model=model, temperature=0.1, max_tokens=1500,
+            r = client.chat.completions.create(model=model, temperature=0.1, max_tokens=4000,
+                                               reasoning_effort="low", response_format=AI_RESPONSE_FORMAT,
                                                messages=[{"role": "system", "content": PROMPT},
                                                          {"role": "user", "content": content}])
-            raw_text = r.choices[0].message.content or ""
-            diag = _diag(r, raw_text, marker)
-            text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.S)
-            m = re.search(r"\{.*\}", text, re.S)
-            if not m:
-                last = "model reply failed validation: no JSON object in reply"
-                continue
-            try:
-                return validate_ai(json.loads(m.group(0))) | diag
-            except ValueError as e:   # json.JSONDecodeError is a ValueError too
-                last = f"model reply failed validation: {e}"
         except Exception as e:
-            last = f"model failed: {e}"
+            return {"error": f"model failed: {e}"[:500]} | diag
+        raw_text = r.choices[0].message.content or ""
+        diag = _diag(r, raw_text, marker)
+        text = re.sub(r"<think>.*?</think>", "", raw_text, flags=re.S)
+        m = re.search(r"\{.*\}", text, re.S)
+        if not m:
+            last = "model reply failed validation: no JSON object in reply"
+            continue
+        try:
+            return validate_ai(json.loads(m.group(0))) | diag
+        except ValueError as e:   # json.JSONDecodeError is a ValueError too
+            last = f"model reply failed validation: {e}"
     return {"error": str(last)[:500]} | diag
 
 
