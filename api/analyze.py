@@ -14,6 +14,7 @@ BENIGN_HOSTS = ("registry.npmjs.org", "github.com", "nodejs.org", "objects.githu
 HOOKS = ("preinstall", "install", "postinstall")
 LOADED = "[vulture] loading "
 MALWARE_AT, SUSPICIOUS_AT = 60, 25
+AI_UNCONFIRMED = "AI assessment, not confirmed by observed behaviour"
 SEVERITY = {"safe": 0, "incomplete": 0, "suspicious": 1, "malware": 2}
 # Audit #13/#33: say plainly what the sandbox is. Static text: keep in sync with orchestrator.py.
 ISOLATION = {
@@ -83,6 +84,16 @@ def evidence(raw: dict) -> dict:
         writes.update(o.get("files_written_outside_project", []))
         loaded.update(o.get("code_loaded", []))
 
+    # Confirmed-malicious behaviour inside one process tree (one step of one run): it read a planted
+    # secret AND opened an outbound connection (anything but DNS / loopback / unix sockets).
+    read_and_connect = []
+    for r in runs:
+        o = r.get("observed", {})
+        read_steps = {h.get("step") for h in o.get("honeytoken_access", []) if h.get("op") == "read"}
+        conn_steps = {n.get("step") for n in o.get("network", [])
+                      if n.get("ip") and n.get("port") not in (53, None) and not n["ip"].startswith("127.")}
+        read_and_connect += [{"run": r["name"], "step": st} for st in sorted(read_steps & conn_steps, key=str)]
+
     dns = sorted({e["name"] for e in sink if e["kind"] == "dns"} - set(BENIGN_HOSTS))
     requests = [e for e in sink if e["kind"] in ("http", "tls", "tcp")]
     exfil = [e for e in requests if marker in json.dumps(e)]
@@ -111,6 +122,7 @@ def evidence(raw: dict) -> dict:
         "dormant_code": dormant[:30],
         "trigger_conditions": gated[:20],
         "matrix": by_run,
+        "read_and_connect": read_and_connect[:20],
     }
 
 
@@ -133,8 +145,22 @@ def score(ev: dict) -> dict:
         s += 5; reasons.append("runs code at install time")
     if ev["trigger_conditions"]:
         s += 10; reasons.append("code checks time / CI / environment before acting (possible evasion)")
-    verdict = "malware" if s >= MALWARE_AT else "suspicious" if s >= SUSPICIOUS_AT else "safe"
-    return {"verdict": verdict, "risk_score": min(s, 100), "reasons": reasons}
+    # MALWARE only on observed behaviour: the scan marker reached the fake internet, or one process tree
+    # read a planted secret and connected out. A high score without that stays SUSPICIOUS.
+    confirmed = []
+    if ev["exfiltration"]:
+        confirmed.append("planted secret marker reached the fake internet")
+    if ev.get("read_and_connect"):
+        x = ev["read_and_connect"][0]
+        confirmed.append(f"read a planted secret and connected out in one process tree ({x['run']} / {x['step']})")
+    if confirmed:
+        verdict = "malware"
+        reasons.insert(0, "confirmed by observed behaviour: " + "; ".join(confirmed))
+    else:
+        verdict = "suspicious" if s >= SUSPICIOUS_AT else "safe"
+        if s >= MALWARE_AT:
+            reasons.append("high risk score, but no exfiltration or secret-read + connection was observed")
+    return {"verdict": verdict, "risk_score": min(s, 100), "reasons": reasons, "confirmed": confirmed}
 
 
 PROMPT = """You are Vulture, a malware analyst for open-source packages. You get evidence from a
@@ -265,10 +291,13 @@ def report(raw: dict) -> dict:
             # A hung install script with nothing else seen means we never saw what it would do.
             rules["verdict"] = "suspicious" if observed else "incomplete"
     ai = llm_report(ev, rules, raw.get("marker", ""))
-    # Rules are the floor (Audit #25): the model may raise the verdict, never lower it.
-    # "incomplete" ranks with "safe", so the model can raise it but can never turn it into "safe".
+    # Rules are the floor (Audit #25): the model may raise the verdict, never lower it, and only up to
+    # SUSPICIOUS. MALWARE is set by the rules alone, from observed behaviour. "incomplete" ranks with
+    # "safe", so the model can raise it but can never turn it into "safe".
     final, source = rules["verdict"], "rules"
-    if ai and SEVERITY.get(ai.get("verdict"), -1) > SEVERITY[final]:
-        final, source = ai["verdict"], "ai"
+    if ai and ai.get("verdict") == "malware" and rules["verdict"] != "malware":
+        ai["note"] = AI_UNCONFIRMED
+    if ai and min(SEVERITY.get(ai.get("verdict"), -1), SEVERITY["suspicious"]) > SEVERITY[final]:
+        final, source = "suspicious", "ai"
     return {"verdict": final, "verdict_source": source, "rules": rules, "ai": ai, "evidence": ev,
             "isolation": dict(ISOLATION)}

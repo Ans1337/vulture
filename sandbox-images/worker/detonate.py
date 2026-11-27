@@ -254,6 +254,14 @@ def run_cmd(label, cmd, cwd, env, trace_dir, timeout):
             "output": out}, trace
 
 
+def tag(observed, label):
+    """Mark which step (= one strace -f process tree) produced each honeytoken access / connection."""
+    for k in ("honeytoken_access", "network"):
+        for x in observed.get(k, []):
+            x["step"] = label
+    return observed
+
+
 def merge(a, b):
     for k, v in b.items():
         if isinstance(v, list):
@@ -298,18 +306,18 @@ def main():
                     progress("detonate", f"run {name}: {hook} script", run=name)
                     step, tr = run_cmd(hook, ["sh", "-c", cmd], project, env, trace_dir, STEP_TIMEOUT)
                     steps.append(step)
-                    merge(traced, parse_trace(tr, home, project, tokens))
+                    merge(traced, tag(parse_trace(tr, home, project, tokens), hook))
             if (project / "node_modules").exists():
                 progress("detonate", f"run {name}: dependency install scripts", run=name)
                 step, tr = run_cmd("deps-rebuild", ["npm", "rebuild", "--foreground-scripts"], project, env,
                                    trace_dir, STEP_TIMEOUT * 2)
                 steps.append(step)
-                merge(traced, parse_trace(tr, home, project, tokens))
+                merge(traced, tag(parse_trace(tr, home, project, tokens), "deps-rebuild"))
             progress("detonate", f"run {name}: loading entry points", run=name)
             (base / "entry.cjs").write_text(ENTRY_JS)
             step, tr = run_cmd("entry", ["node", str(base / "entry.cjs")], project, env, trace_dir, STEP_TIMEOUT)
             steps.append(step)
-            merge(traced, parse_trace(tr, home, project, tokens))
+            merge(traced, tag(parse_trace(tr, home, project, tokens), "entry"))
             hits = len(traced.get("honeytoken_access", []))
             progress("detonate", f"run {name}: {hits} honeytoken hits, {len(traced.get('network', []))} network calls",
                      run=name, honeytoken_hits=hits)
