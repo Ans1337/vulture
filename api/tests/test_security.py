@@ -73,13 +73,16 @@ class SecurityTest(unittest.TestCase):
             import time; time.sleep(0.3)
         self.assertEqual(self.c.get(f"/api/scans/{sid}", headers=H).json()["error"], "npm package not found")
 
-    def test_refuses_to_start_without_token(self):
+    def test_open_mode_without_token(self):
         import importlib
-        with mock.patch.dict(os.environ, {"APP_TOKEN": ""}), self.assertRaises(SystemExit):
+        try:
+            with mock.patch.dict(os.environ, {"APP_TOKEN": ""}):
+                importlib.reload(security)
+                self.assertEqual(security.APP_TOKEN, "")
+                self.assertEqual(self.c.get("/api/scans").status_code, 200)    # open: no token needed
+                self.assertEqual(self.c.post("/api/scans", data={"source": "--bad"}).status_code, 400)  # still validated
+        finally:
             importlib.reload(security)
-        importlib.reload(security)
-        appmod.security = security
-
 
 if __name__ == "__main__":
     unittest.main()

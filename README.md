@@ -24,7 +24,7 @@ open http://localhost:8000
 - `start.sh` creates `.env` from `.env.example` on first run. For the AI verdict set
   `VULTR_INFERENCE_API_KEY` and `AGENT_MODEL` there (Vultr Serverless Inference, OpenAI-compatible API).
   Without them you get the rule-based verdict only. After editing `.env`: `docker compose up -d api`.
-- The API needs an access token (`APP_TOKEN`, generated into `.env` by `start.sh`; the dashboard asks for it once)
+- The API can require an access token (`APP_TOKEN` in `.env`; empty means open, and the dashboard asks for it once when set)
   and listens on `127.0.0.1:8000` only. On a VM put a TLS reverse proxy in front and set `TRUST_PROXY_HEADERS=1`
   (the deployment binds `VULTURE_API_BIND=127.0.0.1:8001` behind Caddy). See [docs/lock-down.md](docs/lock-down.md)
   and [infra/README.md](infra/README.md).

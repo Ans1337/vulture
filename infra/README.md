@@ -60,8 +60,8 @@ production secrets in `/root/vulture/.env`.
 
 ## Hardening: access token and bind address
 
-Every `/api/*` call needs `APP_TOKEN` (set it in `/root/vulture/.env`, plus `TRUST_PROXY_HEADERS=1` behind
-Caddy; the deploy fails without it). See [docs/lock-down.md](../docs/lock-down.md). The API is also published on
+Set `APP_TOKEN` in `/root/vulture/.env` to require a token on every `/api/*` call (empty = open), plus
+`TRUST_PROXY_HEADERS=1` behind Caddy. See [docs/lock-down.md](../docs/lock-down.md). The API is also published on
 `127.0.0.1` only (`VULTURE_API_BIND`, default `127.0.0.1:8000`; the deployment uses `127.0.0.1:8001`),
 with Caddy providing TLS. Do not bind it to `0.0.0.0`: ports published by Docker bypass `ufw`.
 

@@ -18,6 +18,6 @@ Status: **done** = in the code today, **partial** = works with caveats, **planne
 | Playwright in Docker | planned | The browser step above |
 | Resource limits: time and memory caps on every run | done | Per-container memory (no swap), CPU and PID caps, per-stage and whole-scan deadlines, concurrency cap. See [limits-and-lifecycle.md](limits-and-lifecycle.md) |
 | Lifecycle discipline: reset or destroy the environment after each task | done | Labelled per-scan environment, verified teardown in `finally`, orphan reaper on startup and on a timer. See [limits-and-lifecycle.md](limits-and-lifecycle.md) |
-| Access control | done | Token auth, rate limits, upload and source validation. See [lock-down.md](lock-down.md) |
+| Access control | done (token optional) | Token auth, rate limits, upload and source validation. See [lock-down.md](lock-down.md) |
 | Persistent scans | done | SQLite history, cancel, dedupe by pinned version, stored raw evidence for re-analysis |
 | Agentic analysis | done (optional) | `api/investigator.py`: the model reads files, greps and re-runs the package while the sandbox is alive; steps are streamed as events |

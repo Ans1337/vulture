@@ -5,7 +5,7 @@ The code is in [`api/security.py`](../api/security.py).
 
 | Protection | How |
 |---|---|
-| **Access token** | `APP_TOKEN` is required. The API refuses to start without one (the minimum length is 16 characters). Every `/api/*` call needs `Authorization: Bearer <token>` or `X-Vulture-Token`. The check is constant-time. The dashboard HTML stays public. It asks for the token once, stores it in the browser and asks again on a 401. |
+| **Access token** | `APP_TOKEN` is optional. When it is set (minimum 16 characters), every `/api/*` call needs `Authorization: Bearer <token>` or `X-Vulture-Token`. The check is constant-time. The dashboard HTML stays public. When it is empty the API is open and logs a warning at startup. It asks for the token once, stores it in the browser and asks again on a 401. |
 | **Token guessing** | Failed attempts are counted per IP. After `RATE_AUTH_FAILS_PER_MIN` (10) the IP gets 429 for a minute, even with the right token. |
 | **Rate limits per IP** | `RATE_API_PER_MIN` (120) for all API calls. `RATE_SCANS_PER_HOUR` (6) for new scans, which are the expensive ones. The response is 429 with `Retry-After`. |
 | **Real client IP** | Set `TRUST_PROXY_HEADERS=1` behind Caddy. The limiter then uses the last `X-Forwarded-For` entry. It is off by default so clients can't spoof it. |
@@ -22,7 +22,7 @@ openssl rand -hex 24                 # put the result in .env as APP_TOKEN=...
 # production (parivant.se): add APP_TOKEN and TRUST_PROXY_HEADERS=1 to /root/vulture/.env, then redeploy
 ```
 
-`./start.sh` generates a token into `.env` if there is none. **The deploy fails until `APP_TOKEN` is in the production `.env`**, because the API won't start without it. The health checks in CI and in `infra/deploy-main.sh` now check that the API answers 401 without the token and 200 with it.
+Leave `APP_TOKEN` empty to run open: anyone who can reach the API can start scans and spend your credits, limited only by the rate limits. Set it before sharing the URL or turning on `SANDBOX_MODE=vultr`. The deploy check expects 401 without the token and 200 with it when a token is set, and 200 when none is.
 
 Call the API from a script:
 
@@ -38,4 +38,4 @@ curl -H "Authorization: Bearer $APP_TOKEN" -F source=left-pad@1.3.0 https://pari
 
 ## Tests
 
-`cd api && python3 -m unittest discover tests` (needs `fastapi` and `httpx`). They cover auth, token-guess lockout, scan rate limit, source and upload validation, the 413 size cap, error redaction and the refusal to start without a token.
+`cd api && python3 -m unittest discover tests` (needs `fastapi` and `httpx`). They cover auth, token-guess lockout, scan rate limit, source and upload validation, the 413 size cap, error redaction and open mode without a token.

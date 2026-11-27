@@ -2,8 +2,8 @@
 
 All of it is plain ASGI middleware plus a few helpers, configured from the environment:
 
-  APP_TOKEN              required. Every /api/* request must send it (Authorization: Bearer ... or
-                         X-Vulture-Token). Set VULTURE_ALLOW_NO_AUTH=1 to run unauthenticated locally.
+  APP_TOKEN              optional. When set, every /api/* request must send it (Authorization: Bearer ... or
+                         X-Vulture-Token). When empty the API is open (a warning is logged at startup).
   TRUST_PROXY_HEADERS    1 when behind Caddy/nginx: the client IP is the last X-Forwarded-For entry.
   RATE_API_PER_MIN       all /api/* requests per IP per minute            (default 120)
   RATE_SCANS_PER_HOUR    new scans per IP per hour                        (default 6)
@@ -34,7 +34,6 @@ def _int(name: str, default: int) -> int:
 
 
 APP_TOKEN = os.environ.get("APP_TOKEN", "").strip()
-ALLOW_NO_AUTH = os.environ.get("VULTURE_ALLOW_NO_AUTH", "") == "1"
 TRUST_PROXY = os.environ.get("TRUST_PROXY_HEADERS", "") == "1"
 RATE_API = _int("RATE_API_PER_MIN", 120)
 RATE_SCANS = _int("RATE_SCANS_PER_HOUR", 6)
@@ -43,9 +42,9 @@ MAX_UPLOAD = _int("MAX_UPLOAD_MB", 25) * 1024 * 1024
 BODY_TIMEOUT = _int("BODY_READ_TIMEOUT", 30)
 MAX_FORM_OVERHEAD = 64 * 1024   # multipart boundaries + the source field
 
-if not APP_TOKEN and not ALLOW_NO_AUTH:
-    raise SystemExit("APP_TOKEN is not set. Set it in .env (openssl rand -hex 24), or set "
-                     "VULTURE_ALLOW_NO_AUTH=1 for local-only use.")
+if not APP_TOKEN:
+    log.warning("APP_TOKEN is not set: the API is OPEN to anyone who can reach it. Rate limits still apply. "
+                "Set APP_TOKEN in .env (openssl rand -hex 24) to lock it.")
 if APP_TOKEN and len(APP_TOKEN) < 16:
     raise SystemExit("APP_TOKEN is too short (min 16 chars). Try: openssl rand -hex 24")
 
