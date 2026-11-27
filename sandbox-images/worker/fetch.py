@@ -6,15 +6,16 @@ source: npm:<name>[@version] | <name>[@version] | https://github.com/<o>/<r>[.gi
 """
 import hashlib, json, os, re, shutil, subprocess, sys, tarfile, zipfile
 from pathlib import Path
-from common import progress, result, fail
+from common import progress, result, fail, parse_source
 import static_scan
 
 WORK = Path("/work")
 PKG = WORK / "pkg"
 
 
-def sh(cmd, cwd=None, timeout=300):
-    p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout)
+def sh(cmd, cwd=None, timeout=300, env=None):
+    p = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, timeout=timeout,
+                       env={**os.environ, **env} if env else None)
     if p.returncode != 0:
         raise RuntimeError(f"{' '.join(cmd)} failed: {(p.stderr or p.stdout)[-800:]}")
     return p.stdout
@@ -39,7 +40,8 @@ def safe_extract_tar(tf, dest):
 def fetch_npm(spec):
     progress("fetch", f"npm pack {spec}")
     (WORK / "dl").mkdir(exist_ok=True)
-    out = json.loads(sh(["npm", "pack", spec, "--json", "--pack-destination", str(WORK / "dl")]))[0]
+    out = json.loads(sh(["npm", "pack", "--registry=https://registry.npmjs.org/", "--json",
+                         "--pack-destination", str(WORK / "dl"), "--", spec]))[0]
     tgz = WORK / "dl" / out["filename"]
     with tarfile.open(tgz) as tf:
         safe_extract_tar(tf, WORK / "dl")
@@ -48,16 +50,13 @@ def fetch_npm(spec):
             "sha256": sha256(tgz), "pinned": f"{out['name']}@{out['version']}"}
 
 
-def fetch_git(url):
-    ref = None
-    if "#" in url:
-        url, ref = url.split("#", 1)
-    if not re.match(r"^https://[\w.-]+/[\w.-]+/[\w.-]+(\.git)?/?$", url):
-        fail("only https git URLs like https://github.com/owner/repo are accepted")
+def fetch_git(url, ref=None):
     progress("fetch", f"git clone {url}" + (f" @ {ref}" if ref else ""))
-    sh(["git", "clone", "--depth", "50", "--no-recurse-submodules", url, str(PKG)], timeout=300)
+    git_env = {"GIT_ALLOW_PROTOCOL": "https", "GIT_TERMINAL_PROMPT": "0"}
+    sh(["git", "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "clone", "--depth", "50",
+        "--no-recurse-submodules", "--", url + ".git", str(PKG)], timeout=300, env=git_env)
     if ref:
-        sh(["git", "-C", str(PKG), "checkout", "--detach", ref])
+        sh(["git", "-C", str(PKG), "checkout", "--detach", ref, "--"], env=git_env)  # ref can't start with '-'
     commit = sh(["git", "-C", str(PKG), "rev-parse", "HEAD"]).strip()
     tree = sh(["git", "-C", str(PKG), "rev-parse", "HEAD^{tree}"]).strip()
     shutil.rmtree(PKG / ".git", ignore_errors=True)
@@ -113,10 +112,12 @@ def main():
     try:
         if src == "upload":
             meta = fetch_upload()
-        elif src.startswith("https://"):
-            meta = fetch_git(src)
         else:
-            meta = fetch_npm(src[4:] if src.startswith("npm:") else src)
+            try:
+                kind, spec, ref = parse_source(src)
+            except ValueError as e:
+                fail(str(e))
+            meta = fetch_git(spec, ref) if kind == "git" else fetch_npm(spec)
     except Exception as e:
         fail(f"fetch failed: {e}")
     progress("fetch", f"pinned {meta['pinned']}", meta=meta)
