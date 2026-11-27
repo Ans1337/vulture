@@ -11,6 +11,8 @@ import static_scan
 
 WORK = Path("/work")
 PKG = WORK / "pkg"
+MAX_FILES = 20_000                  # per fetched tree (archive members / files after git clone)
+MAX_UNPACKED = 500 * 1024 * 1024    # total uncompressed bytes
 
 
 def sh(cmd, cwd=None, timeout=300, env=None):
@@ -29,8 +31,25 @@ def sha256(path):
     return h.hexdigest()
 
 
+def check_limits(count, total, what):
+    if count > MAX_FILES:
+        fail(f"{what} has too many files (more than {MAX_FILES})")
+    if total > MAX_UNPACKED:
+        fail(f"{what} is too large unpacked (more than {MAX_UNPACKED // 2**20} MB)")
+
+
+def tar_members(tf):
+    """Read the member list, aborting as soon as a limit is crossed (before anything is written)."""
+    members, total = [], 0
+    for m in tf:
+        members.append(m)
+        total += m.size if m.isreg() else 0
+        check_limits(len(members), total, "archive")
+    return members
+
+
 def safe_extract_tar(tf, dest):
-    for m in tf.getmembers():
+    for m in tar_members(tf):
         target = (dest / m.name).resolve()
         if not str(target).startswith(str(dest.resolve())) or m.issym() or m.islnk() or m.isdev():
             continue
@@ -60,6 +79,11 @@ def fetch_git(url, ref=None):
     commit = sh(["git", "-C", str(PKG), "rev-parse", "HEAD"]).strip()
     tree = sh(["git", "-C", str(PKG), "rev-parse", "HEAD^{tree}"]).strip()
     shutil.rmtree(PKG / ".git", ignore_errors=True)
+    count = total = 0
+    for d, dirs, files in os.walk(PKG):
+        count += len(dirs) + len(files)
+        total += sum(os.lstat(os.path.join(d, f)).st_size for f in files)
+        check_limits(count, total, "repository")
     name = version = None
     if (PKG / "package.json").exists():
         pj = json.loads((PKG / "package.json").read_text())
@@ -80,6 +104,7 @@ def fetch_upload():
             safe_extract_tar(tf, PKG)
     elif f.name.endswith(".zip"):
         with zipfile.ZipFile(f) as z:
+            check_limits(len(z.infolist()), sum(i.file_size for i in z.infolist()), "archive")
             for n in z.namelist():
                 t = (PKG / n).resolve()
                 if str(t).startswith(str(PKG.resolve())):
