@@ -2,23 +2,50 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Vulture · is this package safe?</title>
-<link rel="stylesheet" href="style.css">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Vulture · See what a package steals before you install it</title>
+<meta name="description" content="Vulture installs an npm package or GitHub repo on a throwaway Vultr machine stocked with fake secrets and shows you every file it read and every server it called.">
+<meta name="theme-color" content="#f7f4ee">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='5' fill='%23f7f4ee'/%3E%3Cpath d='M3 8c4 .2 7 2.6 9 8 2-5.4 5-7.800 9-8' fill='none' stroke='%23a3241b' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="preload" href="fonts/fraunces.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="fonts/instrument-sans.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="css/app.css">
+<script type="module" src="js/main.js"></script>
 </head>
 <body>
-<header class="top">
-  <a class="brand" href="#/">🦅 Vulture</a>
-  <nav>
-    <a href="#/" data-nav="home">Scan</a>
-    <a href="#/history" data-nav="history">History</a>
-    <a href="#/approvals" data-nav="approvals">Approvals <span class="badge" id="appr-count" hidden></span></a>
-    <a href="#" id="key-btn" title="Your personal key: it keeps your scans private">Your key</a>
-  </nav>
-  <span id="mock-flag" class="pill warn" hidden title="Showing sample data, no backend calls">sample data</span>
+<a class="sr-only" href="#app">Skip to content</a>
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="#/" aria-label="Vulture home">
+      <svg class="logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8c4 .2 7 2.6 9 8 2-5.4 5-7.8 9-8"/></svg>
+      Vulture
+    </a>
+    <nav class="nav-links" aria-label="Main">
+      <span id="mode-pill"></span>
+      <a href="#/" data-nav="home">Scan</a>
+      <a href="#/history" data-nav="history" aria-label="History"><svg class="ico nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l4 2"/></svg><span class="lbl">History</span></a>
+      <a href="#/approvals" data-nav="approvals" aria-label="Approvals"><svg class="ico nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></svg><span class="lbl">Approvals</span><span id="appr-badge"></span></a>
+      <a href="#" id="key-btn" title="Your personal key keeps your scans private" aria-label="Your key" hidden><svg class="ico nav-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6"/><path d="m15.500 7.5 3 3L22 7l-3-3"/></svg><span class="lbl">Your key</span></a>
+    </nav>
+  </div>
 </header>
-<main class="wrap" id="view"></main>
-<script src="mock.js"></script>
-<script src="app.js"></script>
+<main id="app" tabindex="-1"></main>
+<footer class="footer">
+  <div class="wrap">
+    <span>Vulture runs packages on throwaway Vultr machines. The demo samples are harmless</span>
+    <span><a href="#/history">History</a> · <a href="#/approvals">Approvals</a> · <a href="classic.html">Classic view</a></span>
+  </div>
+</footer>
+<!-- Rough ink edge for the verdict stamp -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <filter id="ink" x="-5%" y="-10%" width="110%" height="120%">
+    <feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2" seed="7" result="grain"/>
+    <feColorMatrix in="grain" type="matrix" values="0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 -2.2 1.72" result="holes"/>
+    <feTurbulence type="fractalNoise" baseFrequency="0.04" numOctaves="2" seed="3" result="warp"/>
+    <feDisplacementMap in="SourceGraphic" in2="warp" scale="2.2" xChannelSelector="R" yChannelSelector="G" result="rough"/>
+    <feComposite in="rough" in2="holes" operator="in"/>
+  </filter>
+</svg>
+<noscript><p style="padding:40px">Vulture needs JavaScript.</p></noscript>
 </body>
 </html>

@@ -10,12 +10,14 @@
 - `GET /api/scans?q=&status=&verdict=&limit=` and `GET /api/scans/{id}?after=<event id>` (only new events) feed the UI.
 
 ## Part 4: UI v2 (`dashboard/`)
-Hash routes in plain JS: `#/` landing (input, drag-and-drop, examples, how it works, recent scans), `#/scan/<id>` (live view that becomes the report), `#/history` (filters), `#/approvals`.
+Hash routes in plain ES modules, no build step: `#/` landing (input, drag-and-drop, samples, how it works, recent scans), `#/scan/<id>` (live view), `#/report/<id>` (the report), `#/history` (search and filters), `#/approvals`. The design direction is in [design.md](design.md), and what the dashboard reads from the API is in [ui-contract.md](ui-contract.md).
 
-- **Live view:** stage timeline, a VM strip (created, booted, destroyed), persona × clock run cards with retry badges, the investigator's steps, a screenshot filmstrip, Cancel and Copy link.
-- **Report:** verdict, the new `incomplete` state and coverage banner, confidence, "what it tried to do", the matrix heat-map, and tabs for honeytokens, network, processes, files, static findings and dormant code.
-- **Sample data:** open `/?mock=1` to run the whole UI on `dashboard/mock.js` with no backend. Two sample scans play out live (a stealer and a benign package), and cancel and filters work. The mock matches the real API shapes, so dropping the flag uses the live API.
-- Events that carry `data.run`, `data.vm`, `data.screenshot` or `data.approval` drive the run cards, VM strip, filmstrip and approval gates. The backend emits `vm` already. Per-run `run` events, screenshots (Part 7) and approvals (Part 8) don't exist yet, so those panels stay empty on live scans.
+- **Live view:** stage timeline, a VM strip (create, boot, detonate, destroyed), persona × clock run cells with retry marks, the investigator's steps, a screenshot trail, Cancel and Copy link. When the scan finishes the verdict lands as a stamp with a link to the report.
+- **Report:** verdict stamp, risk score, AI confidence, "what it tried to do" in plain English, questions the investigator left unexplained, the persona × clock plate, and tabs for indicators, secrets, network, processes, files, static findings, dormant code, screenshots and the timeline. Copy link, Re-scan (`force=true`), JSON download.
+- **Your key:** the personal nonce is minted on first use, kept in `localStorage`, and shown under **Your key** so it can be copied to another device.
+- **Sample data:** open `/?mock=1` to run the whole UI on `dashboard/js/mock.js` with no backend. With no API reachable it switches to sample data by itself. The samples use the same scan, event and report shapes as the API.
+- Events that carry `data.run`, `data.vm`, `data.screenshot` or `data.approval` drive the run cells, VM strip, screenshot trail and approval gates. The backend emits `vm` already. Per-run `state`, screenshots (Part 7) and approvals (Part 8) don't exist yet, so those parts stay empty on live scans.
+- The previous dashboard is still served at `/classic.html`.
 
 ## Part 5: throwaway Vultr VM per scan (`api/vultr.py`)
 `SANDBOX_MODE=vultr` runs the same orchestration code against the Docker daemon of a fresh Vultr instance (over SSH). The API container never executes the package.
